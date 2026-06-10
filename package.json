@@ -1,0 +1,27 @@
+{
+  "name": "chrollo",
+  "version": "0.1.0",
+  "description": "Agentic memory for Pi — verbatim session capture + grep retrieval",
+  "keywords": [
+    "pi-package",
+    "memory",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "format": "prettier --write '*.ts'",
+    "format:check": "prettier --check '*.ts'",
+    "smoke": "tsx -e \"import './storage'; import './search'; import './index'; console.log('OK')\"",
+    "check": "npm run format:check && npm run smoke",
+    "build-thesaurus": "npm install --no-save wordpos && tsx scripts/build-thesaurus.ts && npm uninstall wordpos"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
