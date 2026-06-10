@@ -210,6 +210,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     promptGuidelines: [
       "Use read_memory when you need to recall context from past conversations. Each result line includes its exact line number \u2014 use read <path> --offset <N> --limit <M> to read around the lines identified.",
       "Do not read entire memory files. The returned lines with context are sufficient to answer. If you need more context, expand the reading window around the line numbers. Only read an entire file if the user explicitly asks for it.",
+      "Use read_memory as automatically as you use read or write \u2014 reach for it without being asked, and decode indirect questions into search queries.",
     ],
     parameters: Type.Object({
       query: Type.String({
