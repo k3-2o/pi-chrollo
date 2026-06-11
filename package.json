@@ -12,7 +12,7 @@
   "scripts": {
     "format": "prettier --write 'src/*.ts' 'scripts/*.ts'",
     "format:check": "prettier --check 'src/*.ts' 'scripts/*.ts'",
-    "smoke": "tsx -e \"import './src/extension'; import './src/search'; import './src/storage'; import './src/stats'; import './src/format'; import './src/capture'; console.log('OK')\"",
+    "smoke": "tsx -e \"import './src/index'; import './src/search'; import './src/storage'; import './src/stats'; import './src/format'; import './src/capture'; console.log('OK')\"",
     "check": "npm run format:check && npm run smoke",
     "build-thesaurus": "npm install --no-save wordpos && tsx scripts/build-thesaurus.ts && npm uninstall wordpos"
   },
@@ -21,7 +21,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/extension.ts"
+      "./src/index.ts"
     ]
   }
 }
