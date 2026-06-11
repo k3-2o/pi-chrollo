@@ -1,20 +1,8 @@
-/**
- * Chrollo Storage Layer
- *
- * Responsible for creating session files and appending conversation lines.
- * One markdown file per Pi session. Append-only. Verbatim.
- *
- * Core axiom: never decide what's important at write time.
- * Store everything. Let retrieval figure out relevance.
- */
+// --- Chrollo Storage Layer ---
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface SessionFrontmatter {
   sessionId: string;
@@ -30,21 +18,12 @@ export interface ConversationLine {
   timestamp: Date;
 }
 
-export interface MemoryStats {
-  sessionCount: number;
-  totalLines: number;
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+// --- Constants ---
 
 const CHROLLO_DIR = path.join(os.homedir(), ".chrollo");
 const MEMORIES_DIR = path.join(CHROLLO_DIR, "memories");
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// --- Helpers ---
 
 function formatTimestamp(date: Date): string {
   const y = date.getFullYear();
@@ -81,21 +60,14 @@ function sessionFilePath(sessionId: string, startDate: Date): string {
   return path.join(MEMORIES_DIR, `${date}_${time}_${prefix}.md`);
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+// --- Public API ---
 
-/**
- * Ensure the memory directory exists. Call once at extension load.
- */
+// --- Ensure the memory directory exists ---
 export function initMemoryDir(): void {
   fs.mkdirSync(MEMORIES_DIR, { recursive: true });
 }
 
-/**
- * Find an existing session file by scanning for its session ID prefix in filenames.
- * Returns the full path if found, undefined otherwise.
- */
+// --- Find an existing session file by session ID prefix ---
 export function findSessionFile(sessionId: string): string | undefined {
   if (!fs.existsSync(MEMORIES_DIR)) {
     return undefined;
@@ -113,10 +85,7 @@ export function findSessionFile(sessionId: string): string | undefined {
   return undefined;
 }
 
-/**
- * Create a new session file with YAML frontmatter.
- * Returns the file path.
- */
+// --- Create a new session file with YAML frontmatter ---
 export function createSessionFile(frontmatter: SessionFrontmatter): string {
   initMemoryDir();
 
@@ -141,20 +110,12 @@ export function createSessionFile(frontmatter: SessionFrontmatter): string {
   return filePath;
 }
 
-/**
- * Append a conversation line to a session file.
- *
- * Format:
- *   User → plain line: [HH:MM:SS] [User] text
- *   Agent → blockquoted:  [HH:MM:SS] [Agent]\n> line1\n> line2
- *
- * This is the hot path — must be fast. Just fs.appendFileSync.
- */
+// --- Append a conversation line ---
 export function appendLine(filePath: string, line: ConversationLine): void {
   const time = formatTimestamp(line.timestamp);
 
   if (line.role === "Agent") {
-    // Blockquote entire agent response so internal markdown doesn't clash
+    // --- blockquote so internal markdown doesn't clash ---
     const quoted = line.text
       .split("\n")
       .map((l) => (l.trim() === "" ? ">" : `> ${l}`))
@@ -162,17 +123,12 @@ export function appendLine(filePath: string, line: ConversationLine): void {
     const formatted = `[${time}] [Agent]\n${quoted}\n`;
     fs.appendFileSync(filePath, formatted, "utf-8");
   } else {
-    // User text is plain
-    const text = line.text.replace(/\n/g, "\n  ");
-    const formatted = `[${time}] [User] ${text}\n`;
+    const formatted = `[${time}] [User]\n${line.text}\n`;
     fs.appendFileSync(filePath, formatted, "utf-8");
   }
 }
 
-/**
- * Append both user and assistant messages for a single turn.
- * Adds two blank lines between turns for readability.
- */
+// --- Append both user and agent messages for one turn ---
 export function appendTurn(
   filePath: string,
   userText: string,
@@ -181,34 +137,11 @@ export function appendTurn(
 ): void {
   appendLine(filePath, { role: "User", text: userText, timestamp });
   appendLine(filePath, { role: "Agent", text: agentText, timestamp: new Date() });
-  // Two blank lines between turns so the file is readable even unrendered
+  // --- two blank lines between turns for readability ---
   fs.appendFileSync(filePath, "\n\n", "utf-8");
 }
 
-/**
- * Get memory statistics: session count and total conversation turns.
- */
-export function getMemoryStats(): MemoryStats {
-  if (!fs.existsSync(MEMORIES_DIR)) {
-    return { sessionCount: 0, totalLines: 0 };
-  }
-
-  const files = fs.readdirSync(MEMORIES_DIR).filter((f) => f.endsWith(".md"));
-  let totalLines = 0;
-
-  for (const file of files) {
-    const content = fs.readFileSync(path.join(MEMORIES_DIR, file), "utf-8");
-    // Count [User] lines — both old format [HH:MM:SS] and new format [YYYY-MM-DD HH:MM:SS]
-    const matches = content.match(/^\[(?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}\] \[User\]/gm);
-    totalLines += matches?.length ?? 0;
-  }
-
-  return { sessionCount: files.length, totalLines };
-}
-
-/**
- * Get the memories directory path. Useful for grep operations.
- */
+// --- Get the memories directory path ---
 export function getMemoriesDir(): string {
   return MEMORIES_DIR;
 }

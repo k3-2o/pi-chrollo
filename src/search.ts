@@ -1,12 +1,4 @@
-/**
- * Chrollo Search Layer
- *
- * grep over raw session files. The simplest possible retrieval.
- * Returns matches with ±3 lines of surrounding context.
- *
- * This is the foundation — prove this works before adding anything else.
- * The agent is always in the loop, so exact match + context is enough for ~70% of cases.
- */
+// --- Chrollo Search Layer ---
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -14,19 +6,15 @@ import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { getMemoriesDir } from "./storage.js";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface SearchResult {
   text: string;
   source: string;
-  sourcePath: string; // full path for agent to read directly
+  sourcePath: string; // --- full path for agent ---
   line: number;
   contextBefore: Array<{ text: string; lineNum: number }>;
   contextAfter: Array<{ text: string; lineNum: number }>;
   matchedTerms: string[];
-  lineDate?: Date; // per-line timestamp from [YYYY-MM-DD HH:MM:SS]
+  lineDate?: Date; // --- per-line timestamp ---
 }
 
 export interface SearchResponse {
@@ -35,23 +23,13 @@ export interface SearchResponse {
   totalMatches: number;
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const CONTEXT_WINDOW = 3; // ±3 lines around each match
+const CONTEXT_WINDOW = 3; // --- lines around each match ---
 const MAX_RESULTS = 10;
-const RECENCY_BOOST = 1.0; // multiplier for recent results
-const RECENCY_HALF_DAYS = 30; // half-life in days
+const RECENCY_BOOST = 1.0; // --- recency multiplier ---
+const RECENCY_HALF_DAYS = 30; // --- recency half-life ---
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// --- Helpers ---
 
-/**
- * Extract content words from a query string.
- * Strips stop words and short tokens.
- */
 function extractTerms(query: string): string[] {
   const stopWords = new Set([
     "a",
@@ -211,14 +189,12 @@ function extractTerms(query: string): string[] {
 
   return query
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ") // strip punctuation
+    .replace(/[^\w\s]/g, " ") // --- strip punctuation ---
     .split(/\s+/)
     .filter((word) => word.length > 2 && !stopWords.has(word));
 }
 
-/**
- * Read a file and return its lines. Returns empty array on error.
- */
+// --- Returns empty array on error ---
 function readLines(filePath: string): string[] {
   try {
     return fs.readFileSync(filePath, "utf-8").split("\n");
@@ -227,54 +203,38 @@ function readLines(filePath: string): string[] {
   }
 }
 
-/**
- * Extract the date from a Chrollo filename (YYYY-MM-DD_HHMMSS_prefix.md).
- * Returns null if the filename doesn't match the expected format.
- */
+function tryParseDate(dateStr: string): Date | null {
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// --- Parse date from filename ---
 function parseFileDate(filename: string): Date | null {
   const match = filename.match(/^(\d{4}-\d{2}-\d{2})_\d{6}_[a-f0-9]+\.md$/);
   if (match === null) return null;
-  const d = new Date(match[1] + "T12:00:00Z");
-  return isNaN(d.getTime()) ? null : d;
+  return tryParseDate(match[1] + "T12:00:00Z");
 }
 
-/**
- * Parse the per-line timestamp from a conversation line.
- * New format: [YYYY-MM-DD HH:MM:SS] [User] text
- * Old format: [HH:MM:SS] [User] text
- * Returns null if no date found (old format — use filename date as fallback).
- */
+// --- Parse per-line timestamp ---
 function parseLineDate(line: string): Date | null {
   const match = line.match(/^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]/);
   if (match === null) return null;
-  const d = new Date(match[1] + "T" + match[2] + "Z");
-  return isNaN(d.getTime()) ? null : d;
+  return tryParseDate(match[1] + "T" + match[2] + "Z");
 }
 
-/**
- * Compute the recency multiplier for a line date or file date.
- * Formula: 1 + RECENCY_BOOST / (days_since + 1)
- * Today's results get a 2× boost. 30-day-old get ~1.03×. A year old gets ~1.003×.
- * Recency is a nudge, never an override.
- */
+// --- 1 + boost/(days+1) recency. Nudge, not override ---
 function recencyMultiplier(fileDate: Date | null): number {
   if (fileDate === null) return 1.0;
   const now = Date.now();
   const daysSince = (now - fileDate.getTime()) / (1000 * 60 * 60 * 24);
-  if (daysSince < 0) return 1.0; // future dates = no boost
+  if (daysSince < 0) return 1.0; // --- future dates = no boost ---
   return 1 + RECENCY_BOOST / (daysSince + 1);
 }
 
-// ---------------------------------------------------------------------------
-// Thesaurus
-// ---------------------------------------------------------------------------
+// --- Thesaurus ---
 
 let _thesaurusCache: Record<string, string[]> | null = null;
 
-/**
- * Load the thesaurus JSON from disk. Cached after first load.
- * Returns empty object if file doesn't exist.
- */
 function loadThesaurus(): Record<string, string[]> {
   if (_thesaurusCache !== null) return _thesaurusCache;
 
@@ -289,10 +249,6 @@ function loadThesaurus(): Record<string, string[]> {
   return _thesaurusCache;
 }
 
-/**
- * Expand a list of terms with their synonyms from the thesaurus.
- * Returns deduplicated list: original terms first, then synonyms.
- */
 function expandTerms(terms: string[]): string[] {
   const thesaurus = loadThesaurus();
   const expanded = new Set(terms);
@@ -309,16 +265,8 @@ function expandTerms(terms: string[]): string[] {
   return [...expanded];
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+// --- Public API ---
 
-/**
- * Search all session files for the given query using grep (exact substring match),
- * falling through to thesaurus-expanded search if nothing is found.
- *
- * Returns results with surrounding context, ranked by recency-weighted term density.
- */
 export function grepSearch(query: string): SearchResponse {
   const terms = extractTerms(query);
 
@@ -326,16 +274,16 @@ export function grepSearch(query: string): SearchResponse {
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
-  // Step 1: try exact grep (handles ~70% of queries)
+  // --- Step 1: try exact grep ---
   const exactResult = runGrep(terms);
   if (exactResult.results.length > 0) {
     return { ...exactResult, layer: "grep" };
   }
 
-  // Step 2: try thesaurus-expanded grep (handles ~+20%, cumulative ~90%)
+  // --- Step 2: thesaurus-expanded fallback ---
   const expandedTerms = expandTerms(terms);
 
-  // Skip if expansion didn't add anything
+  // --- skip if expansion didn't add anything ---
   if (expandedTerms.length <= terms.length) {
     return { results: [], layer: "grep+thesaurus", totalMatches: 0 };
   }
@@ -344,15 +292,7 @@ export function grepSearch(query: string): SearchResponse {
   return { ...expandedResult, layer: "grep+thesaurus" };
 }
 
-/**
- * Core grep logic: use ripgrep to find matching files, then extract context.
- *
- * Why ripgrep instead of JS loop:
- *   - rg is written in Rust with SIMD — searches 100k files in milliseconds
- *   - JS would read every file and scan every line — slow at scale
- *   - rg -l (files-with-matches) gives us the needle, we extract context
- *   - Our context extraction code stays the same
- */
+// --- Core grep logic: ripgrep + JS context extraction ---
 function runGrep(terms: string[]): SearchResponse {
   const memoriesDir = getMemoriesDir();
 
@@ -360,7 +300,7 @@ function runGrep(terms: string[]): SearchResponse {
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
-  // Use ripgrep to find which files contain any of the terms
+  // --- use ripgrep to find matching files ---
   const termFlags: string[] = [];
   for (const term of terms) {
     termFlags.push("-e", term);
@@ -371,16 +311,16 @@ function runGrep(terms: string[]): SearchResponse {
     rgStdout = execFileSync(
       "rg",
       [
-        "-F", // fixed strings (not regex)
-        "-i", // case-insensitive
-        "-l", // files-with-matches only
+        "-F", // --- fixed strings ---
+        "-i", // --- case-insensitive ---
+        "-l", // --- files-with-matches only ---
         ...termFlags,
         memoriesDir,
       ],
       { encoding: "utf-8", timeout: 5000 },
     );
   } catch {
-    // rg exits 1 (no matches) or 2 (error) — both mean no results
+    // --- rg exits 1 (no matches) or 2 (error) ---
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
@@ -389,7 +329,7 @@ function runGrep(terms: string[]): SearchResponse {
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
-  // Read matched files and extract matching lines with context
+  // --- read matched files and extract context ---
   const allResults: SearchResult[] = [];
 
   for (const filePath of matchedFiles) {
@@ -397,7 +337,7 @@ function runGrep(terms: string[]): SearchResponse {
     const lines = readLines(filePath);
     if (lines.length === 0) continue;
 
-    // Find lines matching any term
+    // --- find lines matching any term ---
     const matchedIndices = new Set<number>();
 
     for (let i = 0; i < lines.length; i++) {
@@ -410,7 +350,7 @@ function runGrep(terms: string[]): SearchResponse {
       }
     }
 
-    // For each matched line, build a result with context
+    // --- build result with context ---
     for (const idx of matchedIndices) {
       const matchedTermsForLine: string[] = [];
       const lower = lines[idx]!.toLowerCase();
@@ -436,7 +376,7 @@ function runGrep(terms: string[]): SearchResponse {
       allResults.push({
         text: lines[idx]!,
         source,
-        sourcePath: filePath, // full path for agent to read directly
+        sourcePath: filePath, // --- full path for agent ---
         line: idx + 1,
         contextBefore,
         contextAfter,
@@ -446,11 +386,11 @@ function runGrep(terms: string[]): SearchResponse {
     }
   }
 
-  // Rank by term count, deduplicate, apply recency
+  // --- rank + dedup + recency ---
   allResults.sort((a, b) => b.matchedTerms.length - a.matchedTerms.length);
   const deduped = deduplicateResults(allResults);
   deduped.sort((a, b) => {
-    // Use per-line date if available, otherwise fall back to file date
+    // --- line date or file date fallback ---
     const dateA = a.lineDate ?? parseFileDate(a.source);
     const dateB = b.lineDate ?? parseFileDate(b.source);
     const scoreA = a.matchedTerms.length * recencyMultiplier(dateA);
@@ -465,10 +405,6 @@ function runGrep(terms: string[]): SearchResponse {
   };
 }
 
-/**
- * Remove overlapping results — if two matches are within CONTEXT_WINDOW lines
- * of each other in the same file, keep the one with more matched terms.
- */
 function deduplicateResults(results: SearchResult[]): SearchResult[] {
   const kept: SearchResult[] = [];
   const seen = new Set<string>();
@@ -481,33 +417,4 @@ function deduplicateResults(results: SearchResult[]): SearchResult[] {
   }
 
   return kept;
-}
-
-/**
- * Format search results as a string for injection into the agent's context.
- */
-export function formatResultsForContext(response: SearchResponse): string {
-  if (response.results.length === 0) {
-    return "";
-  }
-
-  const lines: string[] = [];
-
-  for (const result of response.results) {
-    lines.push(`--- ${result.sourcePath}:${result.line} ---`);
-
-    for (const ctx of result.contextBefore) {
-      lines.push(`  ${ctx.text} ...(line ${ctx.lineNum})`);
-    }
-
-    lines.push(`→ ${result.text} ...(line ${result.line})`);
-
-    for (const ctx of result.contextAfter) {
-      lines.push(`  ${ctx.text} ...(line ${ctx.lineNum})`);
-    }
-
-    lines.push("");
-  }
-
-  return lines.join("\n");
 }
