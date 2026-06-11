@@ -3,6 +3,7 @@
 > Date: 2026-06-11 (updated: end-of-session)
 > Built as a Pi extension across multiple sessions.
 > 976 lines of TypeScript across 6 modules. Zero runtime dependencies.
+> Architecture & design decisions: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ---
 
