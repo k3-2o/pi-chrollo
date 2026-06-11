@@ -3,7 +3,7 @@
 > Current status: Pi-native extension working (v0.4). 976 lines across 6 modules.
 > Storage format: **Markdown** with per-line dates, user on own line.
 > Implementation doc: [`implementation-state.md`](implementation-state.md) — what's actually built.
-> Architecture reference: [`ARCHITECTURE.md`](ARCHITECTURE.md) — design decisions and background.
+> Architecture reference: [`ARC.md`](ARC.md) — design decisions and background.
 > Last sync: 2026-06-11.
 
 ---

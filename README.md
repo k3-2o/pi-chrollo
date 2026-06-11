@@ -91,4 +91,4 @@ Chrollo is built on four axioms that everything else follows from:
 
 4. **Zero-cost infrastructure.** The engine is file I/O + string operations + calling `rg`. No APIs, no LLMs, no background servers. It costs nothing to run and nothing to maintain.
 
-The full architecture and design decisions are documented at [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The full architecture and design decisions are documented at [`docs/ARC.md`](docs/ARC.md).

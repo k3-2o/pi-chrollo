@@ -88,7 +88,7 @@ Results are capped at 10. The agent reads the context, reasons, and can call aga
 
 | Feature | Reason Skipped |
 |---|---|
-| **BM25 + Inverted Index** | Ripgrep is instant at current scale. BM25 only needed at 100k+ lines. |
+| **BM25 + Inverted Index** | Ripgrep is instant at current scale. |
 | **Embedding fallback (all-MiniLM)** | 80MB model for ~1% of queries. Thesaurus + agent iteration covers it. |
 | **LLM Wiki layer** | Vanity feature. Raw files are already readable and grep-able. |
 | **Config system** | No knobs to tune. Hardcoded constants work fine. |
@@ -144,72 +144,7 @@ what project are we working on
 
 ---
 
-## 5. Integration Strategy
-
-Chrollo is currently a Pi extension. It registers Pi lifecycle hooks for auto-capture and a `read_memory` tool for retrieval.
-
-### Layer 1: Pi Extension (current)
-
-- `session_start` — init storage, track session metadata
-- `before_agent_start` — capture prompt, auto-inject relevant past memories as hidden context
-- `agent_end` — build chronological turn (text + tool calls) and append to markdown file
-- `session_shutdown` — clear state
-- `read_memory(query)` tool — search past conversations
-- `/recall` command — show memory stats
-
-### Layer 2: MCP Server (future, not built)
-
-A standard MCP server would expose `read_memory` and related tools to any MCP-compatible client. The engine (storage + search + thesaurus) is language-agnostic and portable.
-
-**Tools:**
-- `read_memory(query)` — search memories
-- `store_turn(user_text, agent_text)` — append a turn
-
-### Layer 3: Lifecycle Hooks (future, per harness)
-
-Each harness has its own event model for auto-capture. The core is portable; the integration layer requires per-harness research.
-
-| Harness | Capture Events | Connection |
-|---|---|---|
-| **Claude Code** | `PostToolUse`, `Stop`, `SessionStart` | `.mcp.json` + `hooks.json` |
-| **Codex CLI** | `PostToolUse`, `Stop`, `SessionStart` | `config.toml` or `.codex-plugin/` |
-| **Cursor** | `postToolUse`, `sessionStart` | MCP settings panel |
-| **Gemini CLI** | MCP tools | `gemini config` |
-
----
-
-## 6. Comparison With Other Approaches
-
-| | Chrollo | agentmemory | Mem0 | MemPalace |
-|---|---|---|---|---|
-| **Write-time cost** | $0 (file append) | LLM compression per observation | Embedding + LLM extraction | $0 (file append) |
-| **Storage** | Plain markdown | Binary KV (iii engine) | Managed cloud / vector DB | ChromaDB + files |
-| **Search** | grep + thesaurus | BM25 + vector + graph (RRF) | Vector + graph | Vector (ChromaDB) |
-| **LLM needed** | No | Yes | Yes | No |
-| **Architecture** | In-agent extension | Background daemon | Cloud API | Local daemon |
-| **Dependencies** | ripgrep + Node | iii-engine binary + npm | API key + vector DB | Python + ChromaDB |
-| **Exact recall** | Perfect | No (compressed) | No (embedded) | Perfect |
-| **Provenance** | File + line number | Observable trace | Not tracked | Not tracked |
-
-### Where Chrollo Wins
-
-- **Exact factual recall** — grep finds literal strings. Compressed/embedded memories lose them.
-- **Synonym coverage** — WordNet thesaurus handles linguistic variation without vector overhead.
-- **Provenance** — every result traces back to a specific file and line number.
-- **Write-time cost** — zero computation per observation. No LLM calls, no embeddings.
-- **Operational cost** — no servers, no API keys, no background daemons.
-- **Information preservation** — nothing is compressed, summarized, or extracted. Everything is kept.
-
-### Where It Loses
-
-- **Conceptual retrieval** — thesaurus covers synonyms but not semantic similarity. The ~1% edge case where "team culture" needs to find "collaborative environment" requires an embedding fallback (optional, not built).
-- **Temporal reasoning** — basic timestamp + recency, but no validity windows or fact evolution tracking.
-- **Setup** — requires Node.js + ripgrep. Cloud services are zero-install.
-- **Enterprise auth** — no SOC 2, no HIPAA, no multi-tenant access controls.
-
----
-
-## 7. Key Design Decisions
+## 5. Key Design Decisions
 
 | Question | Decision | Reasoning |
 |---|---|---|
@@ -229,7 +164,7 @@ Each harness has its own event model for auto-capture. The core is portable; the
 
 ---
 
-## 8. Open Questions
+## 6. Open Questions
 
 | Question | Status |
 |---|---|
@@ -240,7 +175,7 @@ Each harness has its own event model for auto-capture. The core is portable; the
 
 ---
 
-## 9. Codebase
+## 7. Codebase
 
 ```
 976 lines of TypeScript. 6 modules. Zero runtime dependencies.
