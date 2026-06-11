@@ -27,17 +27,19 @@
 ## 1. Core Thesis
 
 > Don't decide what's important at write time. Store everything verbatim.
-> Let the agent + retrieval engine figure out relevance at query time.
+> Let the agent figure out relevance at query time.
 
-**Unchanged from the original design.** This axiom drove every decision.
+**This axiom drove every decision.** No compression, no summarization, no extraction at write time. Every turn is preserved exactly as it happened.
 
-**Secondary insight (also unchanged):** In agentic systems, the agent is always in the loop. It can read, reason, iterate, and search again. Vector search optimizes for perfect first-shot retrieval, which is solving the wrong problem. We don't need vectors — we need grep + thesaurus + recency + agent reads context.
+**Secondary insight:** In agentic systems, the agent is always in the loop. It can read, reason, iterate, and search again. Vector search / BM25 / inverted indexes optimize for perfect first-shot retrieval — solving the wrong problem for the agentic case. We don't need any of them. We need greppable plain text + synonym expansion + an agent that's been taught to be curious.
+
+**The original design spec** (`docs/COMPLETE-SESSION-STATE.md`) includes a full BM25 + inverted index + embedding fallback architecture as a future option. These were explicitly deprioritized (see §11). What's actually built is below.
 
 ---
 
 ## 2. Architecture — As Built
 
-### Storage Layer (Layer 0)
+### Storage Layer
 
 - **Format:** Plain markdown files, one per Pi session
 - **Location:** `~/.chrollo/memories/`
@@ -69,16 +71,19 @@ what project are we working on
 - Timestamps include full date (`YYYY-MM-DD HH:MM:SS`) — enables per-line recency
 - Format backward-compatible: old files without dates still work (fallback to filename date)
 
-### Retrieval Engine (Layer 2)
+### Retrieval Engine
 
 Executed at query time. Two layers implemented:
 
 ```
-STEP 1: Parse query → extract key terms (nouns, verbs, entities)
+STEP 1: Parse query → extract key terms (remove stop words, punctuation)
 STEP 2: ripgrep (exact string match) → handles ~70% of queries
-STEP 3: rg + thesaurus (WordNet expansion) → +~20% (cumulative ~90%)
-        (BM25 + embedding not implemented — see §11)
+STEP 3: WordNet thesaurus expansion → rg again → +~20% (cumulative ~90%)
 ```
+
+There is no Step 4. No BM25, no inverted index, no embedding fallback. The original design spec described those as future additions, but they were deprioritized (see §11) — ripgrep is instant at current scale, and the agent iterates if results aren't precise enough.
+
+The full vision document at `docs/COMPLETE-SESSION-STATE.md` covers the complete 6-layer architecture (including the optional BM25 and embedding layers) for reference. What's actually built stops at the thesaurus because it's already enough.
 
 ### Context Window
 
@@ -461,9 +466,9 @@ Uses `Text` component from `@earendil-works/pi-tui`. Standard Pi collapse/expand
 
 | Feature | Why Skipped |
 |---|---|
-| **BM25 + Inverted Index** | Ripgrep is instant at current scale. BM25 needed at 100k+ lines only. |
-| **Embedding Fallback (all-MiniLM)** | 80MB model for 1% of queries. Thesaurus covers most. |
-| **LLM Wiki (human-readable layer)** | Vanity feature. Blockquoted files are readable raw. |
+| **BM25 + Inverted Index** | Ripgrep is instant at current scale. BM25 needed at 100k+ lines only. Original spec describes this as a future layer. |
+| **Embedding Fallback (all-MiniLM)** | 80MB model for 1% of queries. Thesaurus + agent iteration covers it. Original spec describes this as optional. |
+| **LLM Wiki (human-readable layer)** | Vanity feature. Blockquoted files are readable raw. Full design vision in [`ORIGINAL-DESIGN-SPEC.md`](ORIGINAL-DESIGN-SPEC.md). |
 | **Config system (TOML)** | No knobs to tune yet. Hardcoded constants are fine. |
 | **Soft deletion (forgotten flag)** | Philosophy says "storage is cheap, don't delete." |
 | **MCP Server** | Only needed if deploying to Claude Code, Codex, etc. |

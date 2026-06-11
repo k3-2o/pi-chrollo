@@ -1,40 +1,94 @@
 # Chrollo — Agentic Memory for Pi
 
-Auto-captures every conversation into markdown files. Grep-based retrieval with WordNet synonym expansion. The agent remembers what you've done across sessions.
+**A philosophy, not a database.** Zero-cost memory that teaches your agent to remember.
 
-## Setup
+---
+
+## The Thesis
+
+> *"Every other memory system was designed for non-agentic retrieval. They optimize benchmark scores. But in agentic systems, the agent is always there — it can grep, read, reason, iterate, search again. This changes everything."*
+
+Chrollo trusts the agent. It doesn't compress, embed, summarize, or index at write time. It stores everything verbatim in plain markdown files and lets the agent do the work at query time.
+
+**No LLM calls. No vector embeddings. No compression pipelines. No background daemon. Just grep + a thesaurus.**
+
+The PwC paper *"Is Grep All You Need?"* (arXiv:2605.15184, May 2026) proved that grep is competitive with vector search in agentic contexts — because the agent is always in the loop and can iterate. Chrollo pushes that further: no vectors, no BM25, no embeddings. Just ripgrep + WordNet thesaurus + an agent that knows how to think.
+
+---
+
+## How It's Different
+
+| | agentmemory / Mem0 / others | **Chrollo** |
+|---|---|---|
+| **Write-time cost** | LLM compression on every observation — $0.46–$5/mo | **$0 — just append to a file** |
+| **Storage** | Binary KV store (unreadable) | **Plain markdown — cat, grep, open in Obsidian** |
+| **Search** | BM25 + vector + graph (RRF fusion) | **ripgrep + WordNet thesaurus** |
+| **Architecture** | Background daemon, 4 ports, Rust runtime | **Lives inside Pi's extension system** |
+| **Dependencies** | iii-engine binary + npm deps | **Zero. Just Node.js + ripgrep** |
+| **What it is** | An external database the agent queries | **The agent learning to remember** |
+
+---
+
+## What You Get
+
+- **Verbatim capture** — every turn saved to `~/.chrollo/memories/*.md` automatically
+- **Zero information loss** — no compression, no summarization, no extraction
+- **Auto-inject** — relevant past memories silently injected as context before every response
+- **`read_memory` tool** — the agent searches across sessions using ripgrep + thesaurus
+- **Recency scoring** — line-level timestamps so recent context ranks higher
+- **WordNet thesaurus** — 606 words, 3,357 synonym pairs, 46KB. Zero runtime deps.
+- **Grep-compatible** — `rg "python" ~/.chrollo/memories/` works on any machine
+- **Zero cost** — no API keys, no LLM calls, no server to maintain
+
+---
+
+## Quick Install
 
 ```bash
-cd ~/.pi/agent/extensions && git clone https://github.com/k3-2o/pi-chrollo.git
-sudo apt install ripgrep     # Linux
-brew install ripgrep         # macOS
-# Do /reload in Pi — extension auto-loads. The ~/.chrollo/ directory
-# is created on first use. Optionally run `npm run build-thesaurus`
-# inside the repo for WordNet synonym support.
+# Prerequisites
+sudo apt install ripgrep          # Linux
+brew install ripgrep              # macOS
+
+# Install the extension
+cd ~/.pi/agent/extensions
+git clone https://github.com/k3-2o/pi-chrollo.git
+
+# One-time thesaurus build (optional but recommended)
+cd pi-chrollo && npm run build-thesaurus
+
+# Reload Pi — extension auto-loads
+# /reload in Pi
 ```
 
-No config, no API keys, no runtime dependencies.
+---
 
-## What you get
+## The Codebase
 
-Every turn — your prompts, the agent's responses, tool calls — gets saved verbatim to `~/.chrollo/memories/`. One file per session.
+```
+976 lines of TypeScript. 6 modules. Zero runtime dependencies.
 
-The agent has two ways to recall:
-- **Auto-inject** — relevant past memories are silently injected as context before every response
-- **`read_memory` tool** — the agent can search explicitly for deeper context
-
-`/recall` shows memory stats (session count, turn count).
-
-## Memory format
-
-```markdown
-[2026-06-11 00:20:27] [User]
-what's my best language?
-
-[2026-06-11 00:20:27] [Agent]
-> read_memory python preference
->
-> Based on our conversations, you said **Python** is your preference.
+chrollo/
+├── index.ts          ← Pi extension wiring (hooks, tools, commands)
+└── src/
+    ├── capture.ts    ← Turn capture (extractText, formatToolCall)
+    ├── format.ts     ← Output formatting + TUI rendering
+    ├── search.ts     ← Retrieval engine (ripgrep + thesaurus + recency)
+    ├── stats.ts      ← Memory statistics
+    └── storage.ts    ← File I/O (create, append, read)
 ```
 
-Agent responses are blockquoted so internal markdown doesn't clash. Timestamps on every line enable recency scoring across resumed sessions.
+---
+
+## Philosophy (Not Features)
+
+Chrollo is built on four axioms that everything else follows from:
+
+1. **Don't decide what's important at write time.** Store everything verbatim. Let the agent figure out relevance at query time.
+
+2. **The agent is always in the loop.** It can read, reason, iterate, and search again. Vector search optimizes for perfect first-shot retrieval, which solves the wrong problem.
+
+3. **Plain text is the universal interface.** Markdown files that `cat`, `grep`, `rg`, `less`, and Obsidian can all read. No binary formats, no proprietary stores.
+
+4. **Zero-cost infrastructure.** The engine is file I/O + string operations + calling `rg`. No APIs, no LLMs, no background servers. It costs nothing to run and nothing to maintain.
+
+The full design vision is documented at [`docs/ORIGINAL-DESIGN-SPEC.md`](docs/ORIGINAL-DESIGN-SPEC.md) — the original 1,400-line spec covering the PwC paper analysis, market comparison against every competitor, integration strategy, and every design decision.

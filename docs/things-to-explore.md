@@ -2,7 +2,8 @@
 
 > Current status: Pi-native extension working (v0.4). 976 lines across 6 modules.
 > Storage format: **Markdown** with per-line dates, user on own line.
-> Implementation doc: `implementation-state.md` in this directory.
+> Implementation doc: [`implementation-state.md`](implementation-state.md) — what's actually built.
+> Full design vision: [`ORIGINAL-DESIGN-SPEC.md`](ORIGINAL-DESIGN-SPEC.md) — the original 1,400-line spec with market analysis, competitor comparisons, and every design decision.
 > Last sync: 2026-06-11.
 
 ---
