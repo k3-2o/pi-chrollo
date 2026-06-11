@@ -33,7 +33,7 @@
 
 **Secondary insight:** In agentic systems, the agent is always in the loop. It can read, reason, iterate, and search again. Vector search / BM25 / inverted indexes optimize for perfect first-shot retrieval — solving the wrong problem for the agentic case. We don't need any of them. We need greppable plain text + synonym expansion + an agent that's been taught to be curious.
 
-**The original design spec** (`docs/COMPLETE-SESSION-STATE.md`) includes a full BM25 + inverted index + embedding fallback architecture as a future option. These were explicitly deprioritized (see §11). What's actually built is below.
+**The original design spec** included a full BM25 + inverted index + embedding fallback architecture as a future option. These were explicitly deprioritized (see §11). What's actually built is below.
 
 ---
 
@@ -83,7 +83,7 @@ STEP 3: WordNet thesaurus expansion → rg again → +~20% (cumulative ~90%)
 
 There is no Step 4. No BM25, no inverted index, no embedding fallback. The original design spec described those as future additions, but they were deprioritized (see §11) — ripgrep is instant at current scale, and the agent iterates if results aren't precise enough.
 
-The full vision document at `docs/COMPLETE-SESSION-STATE.md` covers the complete 6-layer architecture (including the optional BM25 and embedding layers) for reference. What's actually built stops at the thesaurus because it's already enough.
+What's actually built stops at the thesaurus because it's already enough.
 
 ### Context Window
 
@@ -468,7 +468,7 @@ Uses `Text` component from `@earendil-works/pi-tui`. Standard Pi collapse/expand
 |---|---|
 | **BM25 + Inverted Index** | Ripgrep is instant at current scale. BM25 needed at 100k+ lines only. Original spec describes this as a future layer. |
 | **Embedding Fallback (all-MiniLM)** | 80MB model for 1% of queries. Thesaurus + agent iteration covers it. Original spec describes this as optional. |
-| **LLM Wiki (human-readable layer)** | Vanity feature. Blockquoted files are readable raw. Full design vision in [`ORIGINAL-DESIGN-SPEC.md`](ORIGINAL-DESIGN-SPEC.md). |
+| **LLM Wiki (human-readable layer)** | Vanity feature. Blockquoted files are readable raw. |
 | **Config system (TOML)** | No knobs to tune yet. Hardcoded constants are fine. |
 | **Soft deletion (forgotten flag)** | Philosophy says "storage is cheap, don't delete." |
 | **MCP Server** | Only needed if deploying to Claude Code, Codex, etc. |
@@ -572,5 +572,8 @@ The `~/.chrollo/` directory and `~/.chrollo/memories/` are created automatically
 | Cost per query | $0 (ripgrep + thesaurus = filesystem ops) |
 | Recall coverage | ~70% exact ripgrep + ~20% thesaurus = ~90% cumulative |
 | rg search speed | ~27ms per query (including subprocess spawn) |
+| Sessions captured | 23 sessions, 184 turns |
+| Build time | Multiple sessions across 2 days |
+query (including subprocess spawn) |
 | Sessions captured | 23 sessions, 184 turns |
 | Build time | Multiple sessions across 2 days |
