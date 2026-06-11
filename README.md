@@ -7,18 +7,18 @@ Auto-captures every conversation into markdown files. Grep-based retrieval with 
 ## Setup
 
 ```bash
-# 1. Copy into Pi's extensions directory
-cp -r chrollo ~/.pi/agent/extensions/
+# 1. Clone into Pi's extensions directory
+cd ~/.pi/agent/extensions && git clone https://github.com/k3-2o/pi-chrollo.git
 
 # 2. Install ripgrep (system dependency)
 sudo apt install ripgrep   # Linux
 brew install ripgrep       # macOS
 
 # 3. Generate thesaurus (optional but recommended)
-cd ~/.pi/agent/extensions/chrollo
-npm run build-thesaurus
+cd ~/.pi/agent/extensions/pi-chrollo
+npm install && npm run build-thesaurus
 
-# 4. Restart Pi — extension auto-loads
+# 4. Do /reload in Pi or restart — extension auto-loads
 #    The ~/.chrollo/memories/ directory is created on first use
 ```
 
@@ -45,12 +45,12 @@ what's my best language?
 > Based on our conversations, you said **Python** is your preference.
 ```
 
-Agent responses are blockquoted so internal markdown doesn't clash. Tool calls are captured inline. Per-line dates enable correct recency scoring even for resumed sessions.
+Agent responses are blockquoted so internal markdown doesn't clash. Tool calls are captured in chronological order — text before a tool call comes first, then the tool call, then more text. Per-line dates enable correct recency scoring even for resumed sessions.
 
 ## Commands & Tooling
 
 ```bash
-npm run format     # prettier --write 'src/*.ts' 'scripts/*.ts'
+npm run format     # prettier --write 'index.ts' 'src/*.ts' 'scripts/*.ts'
 npm run check      # format check + smoke test (verifies all modules load)
 npm run build-thesaurus  # generate WordNet thesaurus (one-time)
 ```
@@ -63,12 +63,14 @@ npm run build-thesaurus  # generate WordNet thesaurus (one-time)
 
 ```
 chrollo/
-├── package.json
+├── index.ts            ← Entry — factory, hooks, tool & command registration
+├── package.json        ← pi.extensions: ["./index.ts"]
 ├── .prettierrc.json
+├── README.md
+├── docs/               ← Architecture docs (implementation-state, trade-offs)
 ├── scripts/
 │   └── build-thesaurus.ts
 └── src/
-    ├── extension.ts    ← Pi wiring (hooks, tool/command registration)
     ├── capture.ts      ← Turn capture (extractText, formatToolCall)
     ├── format.ts       ← Output formatting (formatResultsForContext, renderCall, renderResult)
     ├── search.ts       ← Retrieval (ripgrep, thesaurus, recency scoring)
