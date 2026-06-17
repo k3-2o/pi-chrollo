@@ -8,6 +8,7 @@ import {
   findSessionFile,
   createSessionFile,
   appendTurn,
+  setActiveMemoriesDir,
   type SessionFrontmatter,
 } from "./src/storage.js";
 import { grepSearch } from "./src/search.js";
@@ -35,6 +36,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   // --- Lifecycle: session_start ---
 
   pi.on("session_start", async (_event, ctx) => {
+    setActiveMemoriesDir(ctx.cwd);
     initMemoryDir();
 
     const sessionId = ctx.sessionManager.getSessionId();

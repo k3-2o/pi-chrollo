@@ -20,8 +20,9 @@ export interface ConversationLine {
 
 // --- Constants ---
 
-const CHROLLO_DIR = path.join(os.homedir(), ".chrollo");
-const MEMORIES_DIR = path.join(CHROLLO_DIR, "memories");
+const GLOBAL_MEMORIES_DIR = path.join(os.homedir(), ".chrollo", "memories");
+
+let activeMemoriesDir: string | undefined;
 
 // --- Helpers ---
 
@@ -53,33 +54,106 @@ function sessionIdPrefix(sessionId: string): string {
   return sessionId.slice(0, 8);
 }
 
-function sessionFilePath(sessionId: string, startDate: Date): string {
+function findGitRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir);
+
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".git"))) {
+      return dir;
+    }
+
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    dir = parent;
+  }
+}
+
+// --- Resolve per-project memories dir (nearest .chrollo, else git root, else global) ---
+export function resolveMemoriesDir(cwd: string): string {
+  const envDir = process.env.CHROLLO_MEMORIES_DIR?.trim();
+  if (envDir !== undefined && envDir !== "") {
+    return path.resolve(envDir);
+  }
+
+  let dir = path.resolve(cwd);
+  const gitRoot = findGitRoot(dir);
+
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".chrollo"))) {
+      return path.join(dir, ".chrollo", "memories");
+    }
+
+    if (gitRoot !== undefined && dir === gitRoot) {
+      break;
+    }
+
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+
+  if (gitRoot !== undefined) {
+    return path.join(gitRoot, ".chrollo", "memories");
+  }
+
+  return GLOBAL_MEMORIES_DIR;
+}
+
+export function setActiveMemoriesDir(cwd: string): string {
+  activeMemoriesDir = resolveMemoriesDir(cwd);
+  return activeMemoriesDir;
+}
+
+function memoriesDir(): string {
+  return activeMemoriesDir ?? GLOBAL_MEMORIES_DIR;
+}
+
+function sessionFilePath(sessionId: string, startDate: Date, dir: string): string {
   const date = formatDate(startDate);
   const time = formatTime(startDate);
   const prefix = sessionIdPrefix(sessionId);
-  return path.join(MEMORIES_DIR, `${date}_${time}_${prefix}.md`);
+  return path.join(dir, `${date}_${time}_${prefix}.md`);
+}
+
+function findSessionFileInDir(sessionId: string, dir: string): string | undefined {
+  if (!fs.existsSync(dir)) {
+    return undefined;
+  }
+
+  const prefix = sessionIdPrefix(sessionId);
+  const files = fs.readdirSync(dir);
+
+  for (const file of files) {
+    if (file.endsWith(`_${prefix}.md`) && file.startsWith("20")) {
+      return path.join(dir, file);
+    }
+  }
+
+  return undefined;
 }
 
 // --- Public API ---
 
 // --- Ensure the memory directory exists ---
 export function initMemoryDir(): void {
-  fs.mkdirSync(MEMORIES_DIR, { recursive: true });
+  fs.mkdirSync(memoriesDir(), { recursive: true });
 }
 
 // --- Find an existing session file by session ID prefix ---
 export function findSessionFile(sessionId: string): string | undefined {
-  if (!fs.existsSync(MEMORIES_DIR)) {
-    return undefined;
+  const dir = memoriesDir();
+  const found = findSessionFileInDir(sessionId, dir);
+  if (found !== undefined) {
+    return found;
   }
 
-  const prefix = sessionIdPrefix(sessionId);
-  const files = fs.readdirSync(MEMORIES_DIR);
-
-  for (const file of files) {
-    if (file.endsWith(`_${prefix}.md`) && file.startsWith("20")) {
-      return path.join(MEMORIES_DIR, file);
-    }
+  // --- fallback for sessions created before project-scoped storage ---
+  if (dir !== GLOBAL_MEMORIES_DIR) {
+    return findSessionFileInDir(sessionId, GLOBAL_MEMORIES_DIR);
   }
 
   return undefined;
@@ -89,8 +163,9 @@ export function findSessionFile(sessionId: string): string | undefined {
 export function createSessionFile(frontmatter: SessionFrontmatter): string {
   initMemoryDir();
 
+  const dir = memoriesDir();
   const startDate = new Date(frontmatter.startDate);
-  const filePath = sessionFilePath(frontmatter.sessionId, startDate);
+  const filePath = sessionFilePath(frontmatter.sessionId, startDate, dir);
 
   const lines: string[] = [
     "---",
@@ -141,7 +216,12 @@ export function appendTurn(
   fs.appendFileSync(filePath, "\n\n", "utf-8");
 }
 
-// --- Get the memories directory path ---
+// --- Get the active memories directory path ---
 export function getMemoriesDir(): string {
-  return MEMORIES_DIR;
+  return memoriesDir();
+}
+
+// --- Global memories dir (pre-project-scoped sessions) ---
+export function getGlobalMemoriesDir(): string {
+  return GLOBAL_MEMORIES_DIR;
 }
