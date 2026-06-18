@@ -31,13 +31,13 @@ The PwC paper *"Is Grep All You Need?"* (arXiv:2605.15184, May 2026) proved that
 
 ## What You Get
 
-- **Verbatim capture** — every turn saved to `~/.chrollo/memories/*.md` automatically
+- **Verbatim capture** — every turn saved to `.chrollo/memories/*.md` automatically (project-scoped by default, falls back to `~/.chrollo/memories/`)
 - **Zero information loss** — no compression, no summarization, no extraction
 - **Auto-inject** — relevant past memories silently injected as context before every response
 - **`read_memory` tool** — the agent searches across sessions using ripgrep + thesaurus
 - **Recency scoring** — line-level timestamps so recent context ranks higher
 - **WordNet thesaurus** — 606 words, 3,357 synonym pairs, 46KB. Zero runtime deps.
-- **Grep-compatible** — `rg "python" ~/.chrollo/memories/` works on any machine
+- **Grep-compatible** — `rg "python" .chrollo/memories/` works on any machine
 - **Zero cost** — no API keys, no LLM calls, no server to maintain
 
 ---
@@ -55,6 +55,10 @@ git clone https://github.com/k3-2o/pi-chrollo.git
 
 # One-time thesaurus build (optional but recommended)
 cd pi-chrollo && npm run build-thesaurus
+
+# Memories are stored per-project under .chrollo/memories/
+# Add .chrollo/memories/ to .gitignore or commit it — your choice
+# Override location: export CHROLLO_MEMORIES_DIR=/path/to/memories
 
 # Reload Pi — extension auto-loads
 # /reload in Pi
