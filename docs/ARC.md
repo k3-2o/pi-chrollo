@@ -143,7 +143,7 @@ what project are we working on
 | **Soft deletion** | Storage is cheap. Don't delete. |
 | **Multi-device sync** | User brings their own (git, rsync, Dropbox). Files are plain markdown. |
 | **MCP Server** | Only needed for non-Pi harnesses (Claude Code, Codex). Not yet. |
-| **LLM Wiki / structured facts layer** | Karpathy's pattern works for documents — feed it an article, it writes wiki pages, you query the index. For conversation memory, the agent would have to constantly write wiki pages about what was said. This loses the raw text (phrasing, emotion, nuance) and adds an LLM call on every turn. The answer to "but structured facts" is: keep your keywords clean and the agent will find it. |
+| **LLM Wiki** | Karpathy's pattern works for documents — feed it an article, it writes wiki pages, you query the index. For conversation memory, the agent would have to constantly write wiki pages about what was said. This loses the raw text (phrasing, emotion, nuance) and adds an LLM call on every turn. The answer to "but structured facts" is: keep your keywords clean and the agent will find it. |
 | **Memory toggle / TUI display** | Would break ambient injection. The toggle means someone forgets they turned it off — agent goes blind, Chrollo feels broken. The preamble tells the agent "this is files on disk, only use if relevant" — the exact opposite of what the prompt guidelines are building. Display in the TUI turns ambient recall into a wall of file paths and timestamps every turn. These are not bugs to patch out. The fix for injection noise is better retrieval, not a kill switch. |
 
 ---
