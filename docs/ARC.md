@@ -137,7 +137,7 @@ what project are we working on
 
 | Feature | Reason Skipped |
 |---|---|
-| **BM25 + Inverted Index** | Ripgrep is instant at current scale. Only needed past 100k lines. |
+| **BM25 + Inverted Index** | Ripgrep is instant at current scale. Even at 100k+ lines, ripgrep keeps up. |
 | **Embedding fallback (all-MiniLM)** | 80MB model for ~1% of queries. Thesaurus + agent iteration covers it. |
 | **Config system** | No knobs to tune. Hardcoded constants work fine. |
 | **Soft deletion** | Storage is cheap. Don't delete. |
