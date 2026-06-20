@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { getMemoriesDir } from "./storage.js";
 
@@ -238,9 +239,21 @@ let _thesaurusCache: Record<string, string[]> | null = null;
 function loadThesaurus(): Record<string, string[]> {
   if (_thesaurusCache !== null) return _thesaurusCache;
 
-  const thesaurusPath = path.join(os.homedir(), ".chrollo", "thesaurus.json");
+  // --- try user's custom thesaurus in ~/.chrollo/ first ---
+  const userPath = path.join(os.homedir(), ".chrollo", "thesaurus.json");
   try {
-    const data = fs.readFileSync(thesaurusPath, "utf-8");
+    const data = fs.readFileSync(userPath, "utf-8");
+    _thesaurusCache = JSON.parse(data) as Record<string, string[]>;
+    return _thesaurusCache;
+  } catch {
+    // --- fall through to bundled thesaurus ---
+  }
+
+  // --- fall back to thesaurus.json shipped alongside the extension ---
+  try {
+    const extensionDir = path.dirname(fileURLToPath(import.meta.url));
+    const bundledPath = path.join(extensionDir, "..", "thesaurus.json");
+    const data = fs.readFileSync(bundledPath, "utf-8");
     _thesaurusCache = JSON.parse(data) as Record<string, string[]>;
   } catch {
     _thesaurusCache = {};

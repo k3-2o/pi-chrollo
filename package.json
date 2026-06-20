@@ -1,5 +1,5 @@
 {
-  "name": "chrollo",
+  "name": "@k3_2o/pi-chrollo",
   "version": "0.1.0",
   "description": "Agentic memory for Pi — verbatim session capture + grep retrieval",
   "keywords": [
@@ -7,8 +7,16 @@
     "memory",
     "agent"
   ],
-  "author": "",
+  "author": "k3_2o",
   "license": "MIT",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3-2o/pi-chrollo.git"
+  },
   "scripts": {
     "format": "prettier --write 'index.ts' 'src/*.ts' 'scripts/*.ts'",
     "format:check": "prettier --check 'index.ts' 'src/*.ts' 'scripts/*.ts'",

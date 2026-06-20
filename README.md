@@ -1,5 +1,7 @@
 # Chrollo — Agentic Memory for Pi
 
+[![npm](https://img.shields.io/npm/v/@k3_2o/pi-chrollo)](https://www.npmjs.com/package/@k3_2o/pi-chrollo)
+
 **A philosophy, not a database.** Zero-cost memory that teaches your agent to remember.
 
 ---
@@ -36,7 +38,7 @@ The PwC paper *"Is Grep All You Need?"* (arXiv:2605.15184, May 2026) proved that
 - **Auto-inject** — relevant past memories silently injected as context before every response
 - **`read_memory` tool** — the agent searches across sessions using ripgrep + thesaurus
 - **Recency scoring** — line-level timestamps so recent context ranks higher
-- **WordNet thesaurus** — 606 words, 3,357 synonym pairs, 46KB. Zero runtime deps.
+- **WordNet thesaurus** — 606 words, 3,357 synonym pairs, 46KB. Zero runtime deps. Ships with the extension, no build step needed.
 - **Grep-compatible** — `rg "python" .chrollo/memories/` works on any machine
 - **Zero cost** — no API keys, no LLM calls, no server to maintain
 
@@ -49,12 +51,15 @@ The PwC paper *"Is Grep All You Need?"* (arXiv:2605.15184, May 2026) proved that
 sudo apt install ripgrep          # Linux
 brew install ripgrep              # macOS
 
-# Install the extension
+# Install via npm (recommended)
+pi install npm:@k3_2o/pi-chrollo
+
+# Or via GitHub
+pi install git:github.com/k3-2o/pi-chrollo
+
+# Or clone manually
 cd ~/.pi/agent/extensions
 git clone https://github.com/k3-2o/pi-chrollo.git
-
-# One-time thesaurus build (optional but recommended)
-cd pi-chrollo && npm run build-thesaurus
 
 # Memories are stored per-project under .chrollo/memories/
 # Add .chrollo/memories/ to .gitignore or commit it — your choice
