@@ -1,25 +1,10 @@
 # Chrollo — Agentic Memory: Design & Architecture
 
-> Design reference for the Chrollo memory system. Covers the core thesis, architecture decisions, integration strategy, and market context.
+> The architectural reference for Chrollo. A philosophy, not a database.
 
 ---
 
-## 1. Background
-
-Chrollo is inspired by the PwC paper *"Is Grep All You Need? How Agent Harnesses Reshape Agentic Search"* ([arXiv:2605.15184](https://arxiv.org/abs/2605.15184), May 2026). The paper demonstrated that in agentic contexts — where an LLM is always in the loop to read, reason, and iterate — grep-based retrieval matches or exceeds vector search across multiple agent harnesses, at near-zero cost.
-
-**Key findings from the paper:**
-- Experiment 1: grep beat vector search on every harness-model pair tested. Best result: 93.1% (grep) vs 75.9% (vector) on Codex + GPT-5.4 in inline mode.
-- The harness and delivery method matter as much as the retriever itself — changing any one reshuffles results.
-- Agentic retrieval is fundamentally different from standalone retrieval benchmarks, because the agent can always search again.
-
-**What the paper did not test:** hybrid search (grep + vector combined), or thesaurus-based query expansion with grep. Both are areas Chrollo explores.
-
-The core insight: if the agent is always in the loop and can iterate, you don't need expensive infrastructure at write time. You just need fast, precise retrieval + a thesaurus for synonyms + an agent that knows how to search again.
-
----
-
-## 2. Core Thesis
+## 1. Thesis
 
 ### Axiom
 
@@ -30,30 +15,31 @@ The core insight: if the agent is always in the loop and can iterate, you don't 
 
 Every other memory system was designed for non-agentic retrieval — one-shot, no LLM in the loop. They optimize retrieval benchmark scores. But in agentic systems, the agent is always there. It can read, reason, iterate, and search again. This changes what a retrieval engine needs to do.
 
+The PwC paper *"Is Grep All You Need?"* ([arXiv:2605.15184](https://arxiv.org/abs/2605.15184), May 2026) validated this: in agentic contexts, grep-based retrieval matches or exceeds vector search at near-zero cost because the agent iterates. Chrollo pushes further — no vectors, no BM25, no embeddings. Just ripgrep + WordNet thesaurus + an agent that knows how to think.
+
 ### The Approach
 
 ```
-verbatim storage + grep + thesaurus + recency scoring + agent reads context + agent iterates
+verbatim storage + grep + thesaurus + recency + agent reads + agent iterates
      = factual recall solved for the vast majority of cases at near-zero cost
 ```
 
-No vector embeddings. No LLM compression at write time. No background daemon. No external API dependencies.
+No LLM calls at write time. No vector embeddings. No background daemon. No API keys.
 
 ---
 
-## 3. Architecture
+## 2. Architecture
 
-### Storage Layer
+### Storage
 
 - **Format:** Plain markdown files, one per Pi session
-- **Location:** `~/.chrollo/memories/`
+- **Location:** `~/.chrollo/memories/` (global) or `.chrollo/memories/` (per-project)
 - **Content:** Every conversation turn, verbatim + tool call descriptions
-- **Frontmatter:** YAML (session_id, date, harness, cwd, parent_session)
-- **Write mode:** Append-only, real-time (on every agent_end)
-- **File creation:** Deferred until first message with content (empty sessions leave no trace)
+- **Write mode:** Append-only, on every `agent_end`
+- **File creation:** Deferred until first message with content — empty sessions leave no trace
 - **Deletion policy:** Never delete raw text. Storage is cheap.
 
-### Retrieval Engine
+### Retrieval
 
 Two layers, executed at query time:
 
@@ -62,140 +48,155 @@ Layer 1: ripgrep (exact string match) → ~70% of queries
 Layer 2: WordNet thesaurus expansion → ripgrep again → +~20% (cumulative ~90%)
 ```
 
-Results are ranked by term match count, then recency-boosted:
+Results ranked by term match count, then recency-boosted:
 
 ```
 recencyMultiplier = 1 + 1.0 / (daysSince + 1)
 finalScore = matchedTermCount × recencyMultiplier(lineDate)
 ```
 
-Each result includes:
-- Full file path (agent can `read` directly)
-- ±3 lines of context around each match
-- Line numbers on every line (`...(line N)`)
-- No header, no branding, no session summary
-
-Results are capped at 10. The agent reads the context, reasons, and can call again with refined terms if needed.
+Each result includes full file path, ±3 lines of context, line numbers, no branding. Capped at 10 — the agent reads, reasons, and iterates if needed.
 
 ### Thesaurus
 
-- Source: WordNet, processed into a flat JSON synonym map
-- Size: 606 words, 3,357 synonym pairs, 46KB
-- Zero runtime dependencies — loaded once at startup
+- 606 words, 3,357 synonym pairs, 46KB — ships with the extension
+- Zero runtime dependencies. Loaded once at startup with `JSON.parse`.
 - Integration: exact grep → no results → thesaurus expand → grep again
 
-### What's Not Built (And Why)
+### Lifecycle
 
-| Feature | Reason Skipped |
-|---|---|
-| **BM25 + Inverted Index** | Ripgrep is instant at current scale. |
-| **Embedding fallback (all-MiniLM)** | 80MB model for ~1% of queries. Thesaurus + agent iteration covers it. |
-| **LLM Wiki layer** | Vanity feature. Raw files are already readable and grep-able. |
-| **Config system** | No knobs to tune. Hardcoded constants work fine. |
-| **Soft deletion** | Philosophy says "don't decide what's important" — flagging at query time only. |
-| **Multi-device sync** | User brings their own (git, rsync, Dropbox). Files are plain markdown. |
-| **MCP Server** | Only needed if deploying to non-Pi harnesses. |
+Three Pi hooks:
+
+- **`before_agent_start`** — captures `lastUserPrompt`. Runs `grepSearch(prompt)` and injects relevant memories as a hidden custom message (`display: false`). Short prompts (<10 chars) skip auto-recall.
+- **`agent_end`** — builds chronological sections from assistant messages (text → tool calls → text → ...). Appends turn to memory file. Creates the file on first write (lazy creation).
+- **`session_shutdown`** — clears all state. No data persists between sessions.
+
+One tool: **`read_memory(query)`** — searches past conversations via ripgrep + thesaurus. Returns lines with exact line numbers. The agent reads around matches with `read --offset --limit` rather than reading full files.
 
 ---
 
-## 4. Storage Format
+## 3. Storage Format
 
-### File path
 ```
-~/.chrollo/memories/YYYY-MM-DD_HHMMSS_sessionId.md
+~/.chrollo/memories/2026-06-10_143022_019eb1a9.md
 ```
-Format: date + time + first 8 characters of Pi's session UUID.
 
 ### Frontmatter
+
 ```yaml
 ---
 session_id: "019eb1a9-bc39-7571-b68f-9e5ed2678d73"
 date: "2026-06-10"
 harness: "pi"
 cwd: "/home/k2/.workspaces/chrollo"
-parent_session: "/path/to/parent"   # only if resumed/forked
+parent_session: "/path/to/parent"   # only if forked/resumed
 ---
 ```
 
 ### Conversation format
+
 ```
-[YYYY-MM-DD HH:MM:SS] [User]
+[2026-06-10 14:25:36] [User]
 what project are we working on
 
-[YYYY-MM-DD HH:MM:SS] [Agent]
+[2026-06-10 14:25:36] [Agent]
 > read ~/Documents/projects/chrollo/implementation-state.md
 > $ ls -la /home/k2/.workspaces/
 >
 > We're working on **Chrollo** — a persistent memory extension...
 ```
 
-- Agent responses are blockquoted so internal markdown doesn't clash
-- Tool calls are captured chronologically: text → tool calls → text → tool calls
+- Agent responses blockquoted so internal markdown doesn't clash
+- Tool calls captured chronologically: text → tool calls → text → tool calls
 - Two blank lines between turns for readability
-- Per-line dates enable correct recency across resumed sessions
-
-### Space estimates
-
-| Scale | Raw text | With inverted index |
-|---|---|---|
-| 10K turns | ~5MB | ~8MB |
-| 100K turns | ~50MB | ~80MB |
-| 1M turns | ~500MB | ~800MB |
 
 ---
 
-## 5. Key Design Decisions
+## 4. Key Design Decisions
 
 | Question | Decision | Reasoning |
 |---|---|---|
-| **Storage format** | Markdown (not JSONL) | Human-readable, grep-able, Obsidian-compatible. JSONL cleaner but loses `cat` readability. |
-| **File per** | Session (not day) | Mirrors Pi's session UUID. Sessions can span multiple days. |
-| **File creation** | Lazy (on first message, not session start) | Empty sessions leave no trace. |
-| **Tool name** | `read_memory` (not `recall_search`) | The `read_` prefix aligns with model training patterns (`read`, `read_image`). |
-| **`recall_add` tool** | Removed | Redundant with auto-capture. Every turn is already saved verbatim. |
+| **Storage format** | Markdown (not JSONL) | Human-readable, grep-able, Obsidian-compatible. |
+| **File per** | Session (not day) | Mirrors Pi's session UUID. Sessions span multiple days. |
+| **File creation** | Lazy (on first message) | Empty sessions leave no trace. |
+| **Tool name** | `read_memory` (not `recall_search`) | `read_` prefix aligns with model training patterns (`read`, `read_image`). |
+| **`recall_add` tool** | Removed | Redundant with auto-capture. Violates "don't decide what's important." |
 | **Search engine** | ripgrep (not JS loop) | 100x faster, SIMD-accelerated, scales to 100k files. |
-| **Recency** | Per-line timestamps (not file mtime or filename) | Correct recency for resumed sessions. Old format falls back to filename. |
-| **Context window** | ±3 lines | Enough for the agent to understand relevance. Agent can expand with `read --offset --limit`. |
-| **Brand header** | Removed | The agent knows it called the tool. Extra text is noise. |
-| **Tool rendering** | Collapsible `renderCall`/`renderResult` | Ctrl+O toggle. Standard Pi pattern matching `read_image` and `omnisearch_gateway`. |
-| **Comment style** | `// --- text ---` | Consistent across all source files. |
-| **Code organization** | 6 single-concern modules under `src/` | Separation of concerns after codebase reached ~1,000 lines. |
+| **Recency** | Per-line timestamps (not file mtime) | Correct recency for resumed sessions. |
+| **Context window** | ±3 lines | Enough for relevance. Agent expands with `read --offset --limit`. |
+| **Brand header** | Removed | The agent knows it called the tool. Noise. |
 | **Aborted turns** | Not captured | User re-asks if it mattered. Partial responses are noise. |
+| **Memory injection** | Ambient (`display: false`) | The agent gets context without choosing to look. No toggle — if someone forgets they turned it off, the agent goes blind and Chrollo feels broken. No preamble telling the agent "these are files on disk" — that would constrain the exact behavioral shaping the guidelines are there to build. No TUI display — that turns ambient recall into a wall of file paths every turn. The agent treats injected context as its own knowledge, or as closely held notes. That's the magic. |
+| **Auto-recall threshold** | Skip prompts <10 chars | Confirmations and greetings don't need memory lookups. |
+| **Connection errors** | Prompt survives empty response | `lastUserPrompt` not cleared on failed capture. Retries on reconnect. |
+| **File deleted mid-session** | Auto-recreates from session metadata | No turns lost. Agent never notices. |
 
 ---
 
-## 6. Open Questions
+## 5. What's Not Built (And Why)
 
-| Question | Status |
+| Feature | Reason Skipped |
 |---|---|
-| **"No matching memories" bug** | Auto-inject found matches but `read_memory` returned nothing. Possibly a tool directory mismatch. Needs investigation. |
-| **Provenance — include session_id in search results** | File path encodes it. Explicit field would be cleaner. |
-| **Session transition drops last turn** | `/fork` mid-response could clear `lastUserPrompt` before write. Low-severity edge case. |
-| **Corrupted file recovery** | If file gets truncated mid-write, no retry mechanism. Hasn't happened in practice. |
+| **BM25 + Inverted Index** | Ripgrep is instant at current scale. Only needed past 100k lines. |
+| **Embedding fallback (all-MiniLM)** | 80MB model for ~1% of queries. Thesaurus + agent iteration covers it. |
+| **Config system** | No knobs to tune. Hardcoded constants work fine. |
+| **Soft deletion** | Storage is cheap. Don't delete. |
+| **Multi-device sync** | User brings their own (git, rsync, Dropbox). Files are plain markdown. |
+| **MCP Server** | Only needed for non-Pi harnesses (Claude Code, Codex). Not yet. |
+| **LLM Wiki / structured facts layer** | Karpathy's pattern works for documents — feed it an article, it writes wiki pages, you query the index. For conversation memory, the agent would have to constantly write wiki pages about what was said. This loses the raw text (phrasing, emotion, nuance) and adds an LLM call on every turn. The answer to "but structured facts" is: keep your keywords clean and the agent will find it. |
+| **Memory toggle / TUI display** | Would break ambient injection. The toggle means someone forgets they turned it off — agent goes blind, Chrollo feels broken. The preamble tells the agent "this is files on disk, only use if relevant" — the exact opposite of what the prompt guidelines are building. Display in the TUI turns ambient recall into a wall of file paths and timestamps every turn. These are not bugs to patch out. The fix for injection noise is better retrieval, not a kill switch. |
 
 ---
 
-## 7. Codebase
+## 6. Implementation Lessons
+
+These decisions were made during development, shaped by real bugs and edge cases:
+
+### Tool-using turn capture
+
+When the agent calls `read_memory` as a tool, `event.messages` in `agent_end` doesn't contain a "user" role message — it's in an earlier turn. Fix: capture `event.prompt` in `before_agent_start` (always fires before tools), store it, use it in `agent_end` instead of searching for a "user" role.
+
+### Chronological text + tool call order
+
+Original code extracted all tool calls into one array and overwrote `agentText` with each assistant message. Text the agent said *before* running a tool was silently dropped. Fix: build a chronological `sections[]` array iterating all assistant messages in order. Text first, then tool calls, then more text. Never overwrite.
+
+### Recency from line-level dates
+
+Old format used file mtime for recency, which breaks on resumed sessions (new lines in September get August's recency). Fix: each line carries its own `[YYYY-MM-DD HH:MM:SS]` timestamp. Old files fall back to filename date. Both formats coexist.
+
+### Lazy file creation
+
+Original code created a file on `session_start`, leaving empty `.md` files for sessions with no conversation. Fix: store metadata on `session_start`, create zero files. `agent_end` creates the file on first meaningful write. Empty sessions leave no trace.
+
+### File deletion resilience
+
+If a memory file is deleted mid-session, `currentMemoryFile` goes stale. Fix: `ensureMemoryFile()` checks `fs.existsSync()` before returning. If the file is gone, recreates from persisted `sessionMeta`. A new file with the same session ID appears on the next write.
+
+### Connection error resilience
+
+Connection drops cause `agent_end` to fire with an incomplete `event.messages` array — the final assistant text isn't there yet. Original code extracted nothing, cleared state, lost the turn. Fix: don't clear `lastUserPrompt` on failed capture. Keep it alive. If Pi reconnects and fires another `agent_end`, retry with the same prompt.
+
+### Separation of concerns
+
+At ~1,000 lines, 3 files had mixed responsibilities — `index.ts` did wiring + rendering + capture helpers, `search.ts` did retrieval + output formatting, `storage.ts` did I/O + stats. Fix: redistributed into 6 single-concern modules under `src/`: capture, format, search, stats, storage, and the main index.
+
+### Comment style
+
+Mixed `/** JSDoc */`, `// ---`, and inline `//` comments. Fix: all comments use `// --- text ---`. Only kept vital ones: module purpose, section headers, and non-obvious edge cases.
+
+---
+
+## 7. Search Result Format
 
 ```
-976 lines of TypeScript. 6 modules. Zero runtime dependencies.
-
-chrollo/
-├── index.ts           ← Pi extension wiring (225 lines)
-└── src/
-    ├── capture.ts     ← Turn capture (72 lines)
-    ├── format.ts      ← Output formatting (82 lines)
-    ├── search.ts      ← Retrieval engine — rg + thesaurus + recency (420 lines)
-    ├── stats.ts       ← Memory statistics (30 lines)
-    └── storage.ts     ← File I/O (147 lines)
+--- /home/k2/.chrollo/memories/2026-06-10_file.md:42 ---
+    context text ...(line 40)
+    context text ...(line 41)
+→   matched text ...(line 42)
+    context text ...(line 43)
 ```
 
-### Requirements
-- Node.js 20+
-- ripgrep (`rg`) — `apt install ripgrep` / `brew install ripgrep`
-- Zero npm runtime dependencies
-
-### Thesaurus
-- 606 words, 3,357 synonym pairs, 46KB
-- Generated once from WordNet via `npm run build-thesaurus`
-- Loaded at startup with `JSON.parse` — <1ms, no runtime deps
+- Full file path for direct `read` access
+- Line numbers on every line for precise offset/limit navigation
+- No header, no branding, no session summary — the agent knows it called the tool
+- Agent guidelines: read around matches with `--offset --limit`, don't read full files

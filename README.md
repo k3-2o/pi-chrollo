@@ -60,31 +60,13 @@ pi install git:github.com/k3-2o/pi-chrollo
 # Or clone manually
 cd ~/.pi/agent/extensions
 git clone https://github.com/k3-2o/pi-chrollo.git
-
-# Memories are stored per-project under .chrollo/memories/
-# Add .chrollo/memories/ to .gitignore or commit it — your choice
-# Override location: export CHROLLO_MEMORIES_DIR=/path/to/memories
-
-# Reload Pi — extension auto-loads
-# /reload in Pi
 ```
+
+Memories are stored globally under `~/.chrollo/memories/` by default. For project-scoped storage, create a `.chrollo/memories/` directory in your project root — Chrollo will prioritise it over the global one. You can always copy a project's `.chrollo/` folder back to `~/.chrollo/` if you want those memories available globally.
+
+**Version your memories.** Your `.chrollo/memories/` files are plain markdown — they belong in git (or whatever backup you use). Commit them, push them, clone them with your project. If you use project-scoped storage, your memories travel with the repo. If you use global storage, back up `~/.chrollo/` the same way you back up your dotfiles.
 
 ---
-
-## The Codebase
-
-```
-976 lines of TypeScript. 6 modules. Zero runtime dependencies.
-
-chrollo/
-├── index.ts          ← Pi extension wiring (hooks, tools, commands)
-└── src/
-    ├── capture.ts    ← Turn capture (extractText, formatToolCall)
-    ├── format.ts     ← Output formatting + TUI rendering
-    ├── search.ts     ← Retrieval engine (ripgrep + thesaurus + recency)
-    ├── stats.ts      ← Memory statistics
-    └── storage.ts    ← File I/O (create, append, read)
-```
 
 ---
 
@@ -100,4 +82,4 @@ Chrollo is built on four axioms that everything else follows from:
 
 4. **Zero-cost infrastructure.** The engine is file I/O + string operations + calling `rg`. No APIs, no LLMs, no background servers. It costs nothing to run and nothing to maintain.
 
-The full architecture and design decisions are documented at [`docs/ARC.md`](docs/ARC.md).
+Get the full scope — the design choices, trade-offs, and philosophy that went into building Chrollo: [`docs/ARC.md`](docs/ARC.md).

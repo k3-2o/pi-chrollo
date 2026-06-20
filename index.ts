@@ -212,16 +212,4 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     renderResult,
   });
 
-  // --- Command: /recall ---
-
-  pi.registerCommand("recall", {
-    description: "Show Chrollo memory statistics",
-    handler: async (_args, ctx) => {
-      const stats = getMemoryStats();
-      ctx.ui.notify(
-        `Chrollo: ${stats.totalLines} memories across ${stats.sessionCount} sessions`,
-        "info",
-      );
-    },
-  });
 }
