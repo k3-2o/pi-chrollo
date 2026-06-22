@@ -96,10 +96,6 @@ export function resolveMemoriesDir(cwd: string): string {
     dir = parent;
   }
 
-  if (gitRoot !== undefined) {
-    return path.join(gitRoot, ".chrollo", "memories");
-  }
-
   return GLOBAL_MEMORIES_DIR;
 }
 
