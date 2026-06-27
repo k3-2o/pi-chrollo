@@ -4,8 +4,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { getMemoriesDir } from "./storage.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface SearchResult {
   text: string;
@@ -280,15 +283,22 @@ function expandTerms(terms: string[]): string[] {
 
 // --- Public API ---
 
-export function grepSearch(query: string): SearchResponse {
+export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   const terms = extractTerms(query);
+
+  if (signal?.aborted) {
+    throw new Error("read_memory: aborted");
+  }
 
   if (terms.length === 0) {
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
   // --- Step 1: try exact grep ---
-  const exactResult = runGrep(terms);
+  const exactResult = await runGrep(terms, signal);
+  if (signal?.aborted) {
+    throw new Error("read_memory: aborted");
+  }
   if (exactResult.results.length > 0) {
     return { ...exactResult, layer: "grep" };
   }
@@ -301,13 +311,17 @@ export function grepSearch(query: string): SearchResponse {
     return { results: [], layer: "grep+thesaurus", totalMatches: 0 };
   }
 
-  const expandedResult = runGrep(expandedTerms);
+  const expandedResult = await runGrep(expandedTerms, signal);
   return { ...expandedResult, layer: "grep+thesaurus" };
 }
 
 // --- Core grep logic: ripgrep + JS context extraction ---
-function runGrep(terms: string[]): SearchResponse {
+async function runGrep(terms: string[], signal?: AbortSignal): Promise<SearchResponse> {
   const memoriesDir = getMemoriesDir();
+
+  if (signal?.aborted) {
+    throw new Error("read_memory: aborted");
+  }
 
   if (!fs.existsSync(memoriesDir)) {
     return { results: [], layer: "grep", totalMatches: 0 };
@@ -321,7 +335,7 @@ function runGrep(terms: string[]): SearchResponse {
 
   let rgStdout: string;
   try {
-    rgStdout = execFileSync(
+    const { stdout } = await execFileAsync(
       "rg",
       [
         "-F", // --- fixed strings ---
@@ -330,10 +344,14 @@ function runGrep(terms: string[]): SearchResponse {
         ...termFlags,
         memoriesDir,
       ],
-      { encoding: "utf-8", timeout: 5000 },
+      { signal, timeout: 5000 },
     );
-  } catch {
-    // --- rg exits 1 (no matches) or 2 (error) ---
+    rgStdout = stdout;
+  } catch (err: unknown) {
+    // --- rg exits 1 (no matches) or 2 (error). AbortError is re-thrown. ---
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("read_memory: aborted");
+    }
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
@@ -342,10 +360,18 @@ function runGrep(terms: string[]): SearchResponse {
     return { results: [], layer: "grep", totalMatches: 0 };
   }
 
+  if (signal?.aborted) {
+    throw new Error("read_memory: aborted");
+  }
+
   // --- read matched files and extract context ---
   const allResults: SearchResult[] = [];
 
   for (const filePath of matchedFiles) {
+    if (signal?.aborted) {
+      throw new Error("read_memory: aborted");
+    }
+
     const source = path.basename(filePath);
     const lines = readLines(filePath);
     if (lines.length === 0) continue;
@@ -397,6 +423,10 @@ function runGrep(terms: string[]): SearchResponse {
         lineDate: parseLineDate(lines[idx]!),
       });
     }
+  }
+
+  if (signal?.aborted) {
+    throw new Error("read_memory: aborted");
   }
 
   // --- rank + dedup + recency ---

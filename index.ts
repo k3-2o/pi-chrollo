@@ -139,7 +139,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
     if (event.prompt.length < 10) return;
 
-    const response = grepSearch(event.prompt);
+    const response = await grepSearch(event.prompt);
 
     if (response.results.length === 0) return;
 
@@ -182,9 +182,17 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
           "Search terms - specific keywords work best. E.g. 'React framework', 'birthday March', 'chart library'",
       }),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const response = grepSearch(params.query);
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      if (signal?.aborted) {
+        throw new Error("read_memory: aborted");
+      }
+
+      const response = await grepSearch(params.query, signal);
       const formatted = formatResultsForContext(response);
+
+      if (signal?.aborted) {
+        throw new Error("read_memory: aborted");
+      }
 
       if (formatted === "") {
         return {
@@ -211,5 +219,4 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     renderCall,
     renderResult,
   });
-
 }
