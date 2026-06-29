@@ -189,14 +189,13 @@ Mixed `/** JSDoc */`, `// ---`, and inline `//` comments. Fix: all comments use 
 ## 7. Search Result Format
 
 ```
---- /home/k2/.chrollo/memories/2026-06-10_file.md:42 ---
-    context text ...(line 40)
-    context text ...(line 41)
-→   matched text ...(line 42)
-    context text ...(line 43)
+/home/k2/.chrollo/memories/2026-06-10_file.md:42 | matched text
+/home/k2/.chrollo/memories/2026-06-15_file.md:19 | other matched text
+(+3 more — use memory intelligently)
 ```
 
 - Full file path for direct `read` access
-- Line numbers on every line for precise offset/limit navigation
-- No header, no branding, no session summary — the agent knows it called the tool
+- One line per result: `path:line | text`
+- No context lines, arrows, or `(line N)` tags — saves ~70% tokens per result
+- Auto-injection appends `(+N more — use memory intelligently)` when additional matches exist
 - Agent guidelines: read around matches with `--offset --limit`, don't read full files

@@ -35,10 +35,11 @@ The PwC paper *"Is Grep All You Need?"* (arXiv:2605.15184, May 2026) proved that
 
 - **Verbatim capture** — every turn saved to `.chrollo/memories/*.md` automatically (project-scoped by default, falls back to `~/.chrollo/memories/`)
 - **Zero information loss** — no compression, no summarization, no extraction
-- **Auto-inject** — relevant past memories silently injected as context before every response
-- **`read_memory` tool** — the agent searches across sessions using ripgrep + thesaurus
-- **Recency scoring** — line-level timestamps so recent context ranks higher
-- **WordNet thesaurus** — 606 words, 3,357 synonym pairs, 46KB. Zero runtime deps. Ships with the extension, no build step needed.
+- **Auto-inject** — proximity-based memory injection with 50ms hard timeout. Never blocks rendering. Injects up to 10 compact results + `(+N more — use memory intelligently)` heads-up.
+- **`read_memory` tool** — AND-mode search (all terms must co-occur). Compact output: `path:line | text`. Up to 20 results per search.
+- **Recency scoring** — line-level timestamps so recent context ranks higher. Score = `matchedTerms × recencyMultiplier`.
+- **Corpus-aware term extraction** — dynamically filters words that appear in >30% of memory files, keeping auto-injection focused on distinctive terms.
+- **Thesaurus fallback** — 606 words, 3,357 synonym pairs. Only activates as last resort when AND search returns nothing. Never used in auto-injection.
 - **Grep-compatible** — `rg "python" .chrollo/memories/` works on any machine
 - **Zero cost** — no API keys, no LLM calls, no server to maintain
 
