@@ -11,7 +11,7 @@ import {
   setActiveMemoriesDir,
   type SessionFrontmatter,
 } from "./src/storage.js";
-import { grepSearch } from "./src/search.js";
+import { grepSearch, proximitySearch, computeCorpusFrequency, extractDistinctiveTerms } from "./src/search.js";
 import { formatResultsForContext, renderCall, renderResult } from "./src/format.js";
 import { extractText, formatToolCall } from "./src/capture.js";
 import { getMemoryStats } from "./src/stats.js";
@@ -31,7 +31,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   let currentMemoryFile: string | undefined;
   let pendingSession: PendingSession | undefined;
   let lastUserPrompt: string | undefined;
-  let sessionMeta: PendingSession | undefined; // --- persists for file recreation on delete ---
+  let sessionMeta: PendingSession | undefined;
+
+  // --- Cache corpus frequency for term extraction across the session ---
+  let corpusFreqCache: { freq: Map<string, number>; totalFiles: number } | undefined;
 
   // --- Lifecycle: session_start ---
 
@@ -57,6 +60,9 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       pendingSession = { ...sessionMeta };
     }
 
+    // Pre-warm corpus frequency cache
+    corpusFreqCache = computeCorpusFrequency();
+
     const stats = getMemoryStats();
     if (ctx.hasUI) {
       ctx.ui.notify(
@@ -71,7 +77,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   function ensureMemoryFile(): string | undefined {
     if (currentMemoryFile !== undefined) {
       if (fs.existsSync(currentMemoryFile)) return currentMemoryFile;
-      currentMemoryFile = undefined; // --- file was deleted, recreate ---
+      currentMemoryFile = undefined;
     }
 
     if (pendingSession === undefined && sessionMeta !== undefined) {
@@ -120,7 +126,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       }
     }
 
-    // --- don't clear on empty (connection errors) ---
     if (sections.length === 0) return;
 
     const fullAgentText = sections.join("\n\n");
@@ -132,26 +137,49 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     lastUserPrompt = undefined;
   });
 
-  // --- Lifecycle: before_agent_start ---
+  // --- Lifecycle: before_agent_start (auto-injection) ---
 
   pi.on("before_agent_start", async (event, _ctx) => {
     lastUserPrompt = event.prompt;
 
+    // Skip short prompts
     if (event.prompt.length < 10) return;
 
-    const response = await grepSearch(event.prompt);
+    // Extract distinctive terms using corpus frequency
+    const cache = corpusFreqCache ?? computeCorpusFrequency();
+    const distinctTerms = extractDistinctiveTerms(event.prompt, cache.freq, cache.totalFiles);
 
-    if (response.results.length === 0) return;
+    if (distinctTerms.length < 2) return; // too vague for proximity
 
-    const memoryContext = formatResultsForContext(response);
+    // Proximity search with hard 50ms timeout
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 50);
 
-    return {
-      message: {
-        customType: "chrollo",
-        content: memoryContext,
-        display: false, // --- don't show in TUI ---
-      },
-    };
+    try {
+      const response = await proximitySearch(distinctTerms, 20, controller.signal);
+
+      if (response.results.length === 0) return;
+
+      // Inject max 10 results + lightweight heads-up if more exist
+      const topResults = { ...response, results: response.results.slice(0, 10) };
+      const extra = response.totalMatches - topResults.results.length;
+      let memoryContext = formatResultsForContext(topResults);
+      if (extra > 0) {
+        memoryContext += `\n(+${extra} more — use memory intelligently)`;
+      }
+
+      return {
+        message: {
+          customType: "chrollo",
+          content: memoryContext,
+          display: false,
+        },
+      };
+    } catch {
+      return; // timeout or abort — skip ambient injection
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   // --- Lifecycle: session_shutdown ---
@@ -160,6 +188,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     currentMemoryFile = undefined;
     lastUserPrompt = undefined;
     sessionMeta = undefined;
+    corpusFreqCache = undefined;
   });
 
   // --- Tool: read_memory ---
@@ -168,18 +197,18 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     name: "read_memory",
     label: "Read Memory",
     description:
-      "This is your memory.Search past conversations for relevant context. Returns exact line numbers for every result line read around specific matches with read <path> --offset <N> --limit <M> to expand context instead of reading entire files.",
+      "This is your memory. Search past conversations for relevant context. Returns compact results — file:line | text. Use read <path> --offset <N> --limit <M> to expand context. Searches with AND mode (all terms must appear in same file) for precision. If you need broader recall, try again with different keywords.",
     promptSnippet: "Search past conversations",
     promptGuidelines: [
-      "Use read_memory when you need to recall context from past conversations. Each result line includes its exact line number use read <path> --offset <N> --limit <M> to read around the lines identified.",
-      "Do not read entire memory files. The returned lines with context are sufficient to answer. If you need more context, expand the reading window and radius round the line numbers until you belive youve gotten enough context don'tjust read one file read files you belive will more context but still employing this reading radius and practice. Only read an entire file if the user explicitly asks for it.",
-      "Use read_memory as automatically as you use read or write reach for it without being asked, and decode indirect questions into search queries.",
-      "This is your memory. Explore it, question it, build from it. Not by fetching facts, but by remembering. Indirect questions, vague asks treat them as invitations to recall. They're reasons to look back and see what connects. Use it freely.",
+      "Use read_memory when you need to recall context from past conversations. Each result is one line: file:line | text. Use read <path> --offset <N> --limit <M> to read around the lines identified.",
+      "Do not read entire memory files. The returned lines are sufficient to answer. If you need more context, expand the reading window around the line numbers.",
+      "Use read_memory as automatically as you use read or write — reach for it without being asked, and decode indirect questions into search queries.",
+      "This is your memory. Explore it, question it, build from it. Not by fetching facts, but by remembering. Indirect questions, vague asks treat them as invitations to recall. Use it freely.",
     ],
     parameters: Type.Object({
       query: Type.String({
         description:
-          "Search terms - specific keywords work best. E.g. 'React framework', 'birthday March', 'chart library'",
+          "Search terms — use distinctive keywords. All terms must appear in the same session for results. E.g. 'kanagawa palette obsidian', 'dotfiles brew linux', 'chrollo search fix'",
       }),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {

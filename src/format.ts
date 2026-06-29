@@ -3,7 +3,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import type { SearchResponse } from "./search.js";
 
-// --- Agent Context Formatting ---
+// --- Agent Context Formatting (compact: one line per result) ---
 
 export function formatResultsForContext(response: SearchResponse): string {
   if (response.results.length === 0) {
@@ -13,19 +13,7 @@ export function formatResultsForContext(response: SearchResponse): string {
   const lines: string[] = [];
 
   for (const result of response.results) {
-    lines.push(`--- ${result.sourcePath}:${result.line} ---`);
-
-    for (const ctx of result.contextBefore) {
-      lines.push(`  ${ctx.text} ...(line ${ctx.lineNum})`);
-    }
-
-    lines.push(`\u2192 ${result.text} ...(line ${result.line})`);
-
-    for (const ctx of result.contextAfter) {
-      lines.push(`  ${ctx.text} ...(line ${ctx.lineNum})`);
-    }
-
-    lines.push("");
+    lines.push(`${result.sourcePath}:${result.line} | ${result.text}`);
   }
 
   return lines.join("\n");

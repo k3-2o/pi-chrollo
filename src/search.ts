@@ -10,240 +10,91 @@ import { getMemoriesDir } from "./storage.js";
 
 const execFileAsync = promisify(execFile);
 
-export interface SearchResult {
+export interface CompactResult {
   text: string;
   source: string;
   sourcePath: string; // --- full path for agent ---
   line: number;
-  contextBefore: Array<{ text: string; lineNum: number }>;
-  contextAfter: Array<{ text: string; lineNum: number }>;
   matchedTerms: string[];
   lineDate?: Date; // --- per-line timestamp ---
 }
 
 export interface SearchResponse {
-  results: SearchResult[];
-  layer: "grep" | "grep+thesaurus";
+  results: CompactResult[];
+  layer: "and" | "and+thesaurus" | "proximity" | "fuzzy";
   totalMatches: number;
 }
 
-const CONTEXT_WINDOW = 3; // --- lines around each match ---
-const MAX_RESULTS = 10;
-const RECENCY_BOOST = 1.0; // --- recency multiplier ---
-const RECENCY_HALF_DAYS = 30; // --- recency half-life ---
+const MAX_RESULTS = 20;
+const RECENCY_BOOST = 1.0;
+const PROXIMITY_WINDOW = 20; // --- default lines for proximity search ---
+
+// --- Stopwords (trimmed — no more "remember", "talked", "thing" etc) ---
+
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "shall", "can", "need", "dare", "ought",
+  "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+  "as", "into", "through", "during", "before", "after", "above", "below",
+  "between", "out", "off", "over", "under", "again", "further", "then",
+  "once", "here", "there", "when", "where", "why", "how", "all", "both",
+  "each", "few", "more", "most", "other", "some", "such", "no", "nor",
+  "not", "only", "own", "same", "so", "than", "too", "very", "just",
+  "because", "but", "and", "or", "if", "while", "about", "up", "down",
+  "what", "which", "who", "whom", "this", "that", "these", "those",
+  "i", "me", "my", "myself", "we", "our", "ours", "ourselves",
+  "you", "your", "yours", "yourself", "yourselves",
+  "he", "him", "his", "himself", "she", "her", "hers", "herself",
+  "it", "its", "itself", "they", "them", "their", "theirs", "themselves",
+  "also", "get", "got", "like", "know", "think", "want", "look",
+  "use", "find", "give", "tell", "say", "said", "take", "come",
+  "make", "go", "see",
+]);
 
 // --- Helpers ---
-
-function extractTerms(query: string): string[] {
-  const stopWords = new Set([
-    "a",
-    "an",
-    "the",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "being",
-    "have",
-    "has",
-    "had",
-    "do",
-    "does",
-    "did",
-    "will",
-    "would",
-    "could",
-    "should",
-    "may",
-    "might",
-    "shall",
-    "can",
-    "need",
-    "dare",
-    "ought",
-    "used",
-    "to",
-    "of",
-    "in",
-    "for",
-    "on",
-    "with",
-    "at",
-    "by",
-    "from",
-    "as",
-    "into",
-    "through",
-    "during",
-    "before",
-    "after",
-    "above",
-    "below",
-    "between",
-    "out",
-    "off",
-    "over",
-    "under",
-    "again",
-    "further",
-    "then",
-    "once",
-    "here",
-    "there",
-    "when",
-    "where",
-    "why",
-    "how",
-    "all",
-    "both",
-    "each",
-    "few",
-    "more",
-    "most",
-    "other",
-    "some",
-    "such",
-    "no",
-    "nor",
-    "not",
-    "only",
-    "own",
-    "same",
-    "so",
-    "than",
-    "too",
-    "very",
-    "just",
-    "because",
-    "but",
-    "and",
-    "or",
-    "if",
-    "while",
-    "about",
-    "up",
-    "down",
-    "what",
-    "which",
-    "who",
-    "whom",
-    "this",
-    "that",
-    "these",
-    "those",
-    "i",
-    "me",
-    "my",
-    "myself",
-    "we",
-    "our",
-    "ours",
-    "ourselves",
-    "you",
-    "your",
-    "yours",
-    "yourself",
-    "yourselves",
-    "he",
-    "him",
-    "his",
-    "himself",
-    "she",
-    "her",
-    "hers",
-    "herself",
-    "it",
-    "its",
-    "itself",
-    "they",
-    "them",
-    "their",
-    "theirs",
-    "themselves",
-    "also",
-    "get",
-    "got",
-    "like",
-    "know",
-    "think",
-    "want",
-    "look",
-    "use",
-    "find",
-    "give",
-    "tell",
-    "say",
-    "said",
-    "take",
-    "come",
-    "make",
-    "go",
-    "see",
-    "thing",
-    "things",
-    "really",
-    "something",
-    "anything",
-    "remember",
-    "mentioned",
-    "talked",
-  ]);
-
-  return query
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ") // --- strip punctuation ---
-    .split(/\s+/)
-    .filter((word) => word.length > 2 && !stopWords.has(word));
-}
 
 function tryParseDate(dateStr: string): Date | undefined {
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-// --- Parse date from filename ---
 function parseFileDate(filename: string): Date | undefined {
   const match = filename.match(/^(\d{4}-\d{2}-\d{2})_\d{6}_[a-f0-9]+\.md$/);
   if (match === null) return undefined;
   return tryParseDate(match[1] + "T12:00:00Z") ?? undefined;
 }
 
-// --- Parse per-line timestamp ---
 function parseLineDate(line: string): Date | undefined {
   const match = line.match(/^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]/);
   if (match === null) return undefined;
   return tryParseDate(match[1] + "T" + match[2] + "Z") ?? undefined;
 }
 
-// --- 1 + boost/(days+1) recency. Nudge, not override ---
-function recencyMultiplier(fileDate: Date | undefined): number {
-  if (fileDate === undefined) return 1.0;
+function recencyMultiplier(lineDate: Date | undefined): number {
+  if (lineDate === undefined) return 1.0;
   const now = Date.now();
-  const daysSince = (now - fileDate.getTime()) / (1000 * 60 * 60 * 24);
-  if (daysSince < 0) return 1.0; // --- future dates = no boost ---
+  const daysSince = (now - lineDate.getTime()) / (1000 * 60 * 60 * 24);
+  if (daysSince < 0) return 1.0;
   return 1 + RECENCY_BOOST / (daysSince + 1);
 }
 
-// --- Thesaurus ---
+// --- Thesaurus (lazy-loaded, never used in auto-injection) ---
 
 let _thesaurusCache: Record<string, string[]> | null = null;
 
 function loadThesaurus(): Record<string, string[]> {
   if (_thesaurusCache !== null) return _thesaurusCache;
 
-  // --- try user's custom thesaurus in ~/.chrollo/ first ---
   const userPath = path.join(os.homedir(), ".chrollo", "thesaurus.json");
   try {
     const data = fs.readFileSync(userPath, "utf-8");
     _thesaurusCache = JSON.parse(data) as Record<string, string[]>;
     return _thesaurusCache;
   } catch {
-    // --- fall through to bundled thesaurus ---
+    // fall through
   }
 
-  // --- fall back to thesaurus.json shipped alongside the extension ---
   try {
     const extensionDir = path.dirname(fileURLToPath(import.meta.url));
     const bundledPath = path.join(extensionDir, "..", "thesaurus.json");
@@ -256,72 +107,310 @@ function loadThesaurus(): Record<string, string[]> {
   return _thesaurusCache;
 }
 
-function expandTerms(terms: string[]): string[] {
-  const thesaurus = loadThesaurus();
-  const expanded = new Set(terms);
+// --- Corpus word frequency (for filtering common words) ---
 
-  for (const term of terms) {
-    const synonyms = thesaurus[term];
-    if (synonyms !== undefined) {
-      for (const syn of synonyms) {
-        expanded.add(syn);
-      }
+let _corpusFreqCache: Map<string, number> | null = null;
+let _corpusTotalFiles = 0;
+
+export function computeCorpusFrequency(): { freq: Map<string, number>; totalFiles: number } {
+  if (_corpusFreqCache !== null) {
+    return { freq: _corpusFreqCache, totalFiles: _corpusTotalFiles };
+  }
+
+  const dir = getMemoriesDir();
+  if (!fs.existsSync(dir)) {
+    _corpusFreqCache = new Map();
+    _corpusTotalFiles = 0;
+    return { freq: _corpusFreqCache, totalFiles: 0 };
+  }
+
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
+  const freq = new Map<string, number>();
+
+  for (const file of files) {
+    const content = fs.readFileSync(path.join(dir, file), "utf-8");
+    const words = new Set(
+      content
+        .toLowerCase()
+        .replace(/[^\w\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 2),
+    );
+    for (const word of words) {
+      freq.set(word, (freq.get(word) ?? 0) + 1);
     }
   }
 
-  return [...expanded];
+  _corpusFreqCache = freq;
+  _corpusTotalFiles = files.length;
+  return { freq, totalFiles: files.length };
+}
+
+// --- Smart term extraction: 5 max, filtered by corpus frequency ---
+
+export function extractDistinctiveTerms(
+  query: string,
+  corpusFreq: Map<string, number>,
+  totalFiles: number,
+): string[] {
+  const raw = query
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !STOP_WORDS.has(w));
+
+  if (raw.length === 0) return [];
+
+  // Score each word: lower corpus frequency = more distinctive
+  const scored = raw.map((w) => ({
+    word: w,
+    freqRatio: totalFiles > 0 ? (corpusFreq.get(w) ?? 0) / totalFiles : 0,
+  }));
+
+  // Sort by rarity (least frequent first = most distinctive)
+  scored.sort((a, b) => a.freqRatio - b.freqRatio);
+
+  // Take top 5 that appear in less than 30% of files
+  return scored
+    .filter((s) => s.freqRatio < 0.3)
+    .slice(0, 5)
+    .map((s) => s.word);
+}
+
+// --- AND search: all terms must appear in the same file ---
+
+async function andSearch(
+  terms: string[],
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const dir = getMemoriesDir();
+  if (!fs.existsSync(dir)) return [];
+
+  const fileSets: Set<string>[] = [];
+
+  for (const term of terms) {
+    try {
+      const { stdout } = await execFileAsync(
+        "rg",
+        ["-l", "-i", "-F", "-e", term, dir],
+        { signal, timeout: 3000, maxBuffer: 1024 * 1024 },
+      );
+      fileSets.push(new Set(stdout.trim().split("\n").filter((l) => l.length > 0)));
+    } catch {
+      // rg exits 1 when no match — that means AND fails
+      return [];
+    }
+  }
+
+  // Intersect all file sets
+  if (fileSets.length === 0) return [];
+  let result = fileSets[0];
+  for (let i = 1; i < fileSets.length; i++) {
+    result = new Set([...result].filter((x) => fileSets[i].has(x)));
+    if (result.size === 0) return [];
+  }
+
+  return [...result];
+}
+
+/**
+ * Grouped AND search: AND between groups, OR within each group.
+ * First group is expanded with synonyms (OR). Remaining groups are individual terms (AND).
+ */
+async function groupedAndSearch(
+  topGroup: string[],
+  remainingTerms: string[],
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const dir = getMemoriesDir();
+  if (!fs.existsSync(dir)) return [];
+
+  // Get file set for the top group (OR: any term in the group)
+  const topFlags: string[] = [];
+  for (const t of topGroup) topFlags.push("-e", t);
+
+  let topFiles: Set<string>;
+  try {
+    const { stdout } = await execFileAsync(
+      "rg", ["-l", "-i", "-F", ...topFlags, dir],
+      { signal, timeout: 3000, maxBuffer: 1024 * 1024 },
+    );
+    topFiles = new Set(stdout.trim().split("\n").filter((l) => l.length > 0));
+  } catch {
+    return [];
+  }
+
+  if (topFiles.size === 0) return [];
+
+  // AND with each remaining term
+  let result = topFiles;
+  for (const term of remainingTerms) {
+    try {
+      const { stdout } = await execFileAsync(
+        "rg", ["-l", "-i", "-F", "-e", term, dir],
+        { signal, timeout: 3000, maxBuffer: 1024 * 1024 },
+      );
+      const termFiles = new Set(stdout.trim().split("\n").filter((l) => l.length > 0));
+      result = new Set([...result].filter((x) => termFiles.has(x)));
+      if (result.size === 0) return [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [...result];
+}
+
+// --- Get raw matching lines from specific files ---
+
+async function getMatchingLines(
+  terms: string[],
+  files: string[],
+  signal?: AbortSignal,
+): Promise<CompactResult[]> {
+  if (files.length === 0) return [];
+
+  const termFlags: string[] = [];
+  for (const term of terms) {
+    termFlags.push("-e", term);
+  }
+
+  try {
+    const { stdout } = await execFileAsync(
+      "rg",
+      [
+        "--json",
+        "-n",
+        "-F",
+        "-i",
+        ...termFlags,
+        "--", // --- end of flags, positional files follow ---
+        ...files,
+      ],
+      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
+    );
+
+    const results: CompactResult[] = [];
+    for (const raw of stdout.trim().split("\n")) {
+      if (raw.length === 0) continue;
+      let ev: any;
+      try {
+        ev = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (ev.type !== "match") continue;
+
+      const text = (ev.data.lines.text as string).replace(/\n$/, "");
+      results.push({
+        text,
+        source: path.basename(ev.data.path.text),
+        sourcePath: ev.data.path.text,
+        line: ev.data.line_number,
+        matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map(
+          (s) => s.match.text.toLowerCase(),
+        ),
+        lineDate: parseLineDate(text),
+      });
+    }
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+// --- Rank results by term density + recency ---
+
+function rankResults(results: CompactResult[]): CompactResult[] {
+  // Dedup by file:line
+  const seen = new Set<string>();
+  const unique: CompactResult[] = [];
+  for (const r of results) {
+    const key = `${r.sourcePath}:${r.line}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(r);
+  }
+
+  // Sort: more matched terms first, then recency boost
+  unique.sort((a, b) => {
+    const aScore = a.matchedTerms.length * recencyMultiplier(a.lineDate);
+    const bScore = b.matchedTerms.length * recencyMultiplier(b.lineDate);
+    return bScore - aScore;
+  });
+
+  return unique.slice(0, MAX_RESULTS);
 }
 
 // --- Public API ---
 
-export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
-  const terms = extractTerms(query);
+/**
+ * AND search: all extracted terms must appear in the same file.
+ * Falls back to thesaurus expansion on the single most distinctive term
+ * if AND returns nothing.
+ */
+export async function grepSearch(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  if (signal?.aborted) throw new Error("read_memory: aborted");
 
-  if (signal?.aborted) {
-    throw new Error("read_memory: aborted");
-  }
+  const { freq, totalFiles } = computeCorpusFrequency();
+  const terms = extractDistinctiveTerms(query, freq, totalFiles);
 
   if (terms.length === 0) {
-    return { results: [], layer: "grep", totalMatches: 0 };
+    return { results: [], layer: "and", totalMatches: 0 };
   }
 
-  // --- Step 1: try exact grep ---
-  const exactResult = await runGrep(terms, signal);
-  if (signal?.aborted) {
-    throw new Error("read_memory: aborted");
-  }
-  if (exactResult.results.length > 0) {
-    return { ...exactResult, layer: "grep" };
-  }
+  // Step 1: AND search — all terms must appear in same file
+  const andFiles = await andSearch(terms, signal);
+  if (signal?.aborted) throw new Error("read_memory: aborted");
 
-  // --- Step 2: thesaurus-expanded fallback ---
-  const expandedTerms = expandTerms(terms);
-
-  // --- skip if expansion didn't add anything ---
-  if (expandedTerms.length <= terms.length) {
-    return { results: [], layer: "grep+thesaurus", totalMatches: 0 };
+  if (andFiles.length > 0) {
+    const lines = await getMatchingLines(terms, andFiles, signal);
+    const ranked = rankResults(lines);
+    return { results: ranked, layer: "and", totalMatches: lines.length };
   }
 
-  const expandedResult = await runGrep(expandedTerms, signal);
-  return { ...expandedResult, layer: "grep+thesaurus" };
+  // Step 2: Thesaurus fallback — expand most distinctive term, AND with remaining
+  const topTerm = terms[0];
+  const thesaurus = loadThesaurus();
+  const synonyms = thesaurus[topTerm];
+  if (synonyms === undefined || synonyms.length === 0) {
+    return { results: [], layer: "and+thesaurus", totalMatches: 0 };
+  }
+
+  // Grouped AND: (topTerm OR syn1 OR syn2) AND remainingTerms
+  const topGroup = [topTerm, ...synonyms];
+  const remaining = terms.slice(1);
+  const groupedFiles = await groupedAndSearch(topGroup, remaining, signal);
+  if (signal?.aborted) throw new Error("read_memory: aborted");
+
+  if (groupedFiles.length === 0) {
+    return { results: [], layer: "and+thesaurus", totalMatches: 0 };
+  }
+
+  const lines = await getMatchingLines(terms, groupedFiles, signal);
+  const ranked = rankResults(lines);
+  return { results: ranked, layer: "and+thesaurus", totalMatches: lines.length };
 }
 
-// --- Core grep logic: ripgrep JSON output + lightweight JS parsing ---
-async function runGrep(terms: string[], signal?: AbortSignal): Promise<SearchResponse> {
-  const memoriesDir = getMemoriesDir();
-
-  if (signal?.aborted) {
-    throw new Error("read_memory: aborted");
+/**
+ * Proximity search: terms must appear within N lines of each other.
+ * Used for auto-injection — finds conceptually dense passages.
+ */
+export async function proximitySearch(
+  terms: string[],
+  windowLines: number = PROXIMITY_WINDOW,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  const dir = getMemoriesDir();
+  if (!fs.existsSync(dir) || terms.length < 2) {
+    return { results: [], layer: "proximity", totalMatches: 0 };
   }
 
-  if (!fs.existsSync(memoriesDir)) {
-    return { results: [], layer: "grep", totalMatches: 0 };
-  }
-
-  // --- use ripgrep --json to get matches with context in one pass ---
-  // This avoids: fs.readFileSync per file + JS line iteration + term re-checking.
-  // rg does all the heavy lifting in Rust — matching, context extraction, line numbering.
-  // -m 5 caps output at ~5 matches per file, keeping JSON output <1MB even for broad queries.
+  // rg with context window around each match, then check term proximity in JS
   const termFlags: string[] = [];
   for (const term of terms) {
     termFlags.push("-e", term);
@@ -329,145 +418,183 @@ async function runGrep(terms: string[], signal?: AbortSignal): Promise<SearchRes
 
   let rgStdout: string;
   try {
+    const ctxLines = Math.ceil(windowLines / 2);
     const { stdout } = await execFileAsync(
       "rg",
       [
         "--json",
-        "-C", String(CONTEXT_WINDOW),
         "-n",
-        "-F", // --- fixed strings ---
-        "-i", // --- case-insensitive ---
-        "-m", "5", // --- max 5 matches per file (bounds output, still plenty for ranking) ---
+        "-F",
+        "-i",
+        "-C", String(ctxLines),
         ...termFlags,
-        memoriesDir,
+        dir,
       ],
-      { signal, timeout: 5000, maxBuffer: 10 * 1024 * 1024 },
+      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
     );
     rgStdout = stdout;
-  } catch (err: unknown) {
-    // --- rg exits 1 (no matches) or 2 (error). AbortError is re-thrown. ---
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("read_memory: aborted");
-    }
-    return { results: [], layer: "grep", totalMatches: 0 };
+  } catch {
+    return { results: [], layer: "proximity", totalMatches: 0 };
   }
 
-  if (signal?.aborted) {
-    throw new Error("read_memory: aborted");
-  }
+  if (signal?.aborted) throw new Error("read_memory: aborted");
 
-  // --- convert trailing-newline convenience: rg --json appends \n to lines.text ---
-  const stripNewline = (s: string): string =>
-    s.endsWith("\n") ? s.slice(0, -1) : s;
-
-  // --- parse NDJSON lines into a flat event stream ---
+  // Parse JSON events, group by file
   const events: Array<{ type: string; data: any }> = [];
   for (const raw of rgStdout.trim().split("\n")) {
     try {
       events.push(JSON.parse(raw));
     } catch {
-      // skip malformed lines (shouldn't happen with rg)
+      // skip malformed
     }
   }
 
-  if (events.length === 0) {
-    return { results: [], layer: "grep", totalMatches: 0 };
-  }
+  // Group match events by file
+  const fileMatches = new Map<string, Array<{ line: number; term: string; text: string }>>();
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (ev === undefined) continue;
+    if (ev.type !== "match") continue;
 
-  // --- group events by file (between begin / end markers) ---
-  const allResults: SearchResult[] = [];
-  let fileIdx = 0;
+    const filePath = ev.data.path.text as string;
+    const lineNum = ev.data.line_number as number;
+    const text = (ev.data.lines.text as string).replace(/\n$/, "");
 
-  while (fileIdx < events.length) {
-    // skip to next "begin"
-    while (fileIdx < events.length && events[fileIdx]!.type !== "begin") {
-      fileIdx++;
-    }
-    if (fileIdx >= events.length) break;
-
-    const sourcePath = events[fileIdx]!.data.path.text as string;
-    const source = path.basename(sourcePath);
-    fileIdx++; // move past "begin"
-
-    // collect events until "end"
-    const fileEvents: Array<{ type: string; data: any }> = [];
-    while (fileIdx < events.length && events[fileIdx]!.type !== "end") {
-      fileEvents.push(events[fileIdx]!);
-      fileIdx++;
-    }
-    fileIdx++; // move past "end"
-
-    // extract match events with surrounding context
-    for (let i = 0; i < fileEvents.length; i++) {
-      if (fileEvents[i]!.type !== "match") continue;
-
-      const match = fileEvents[i]!;
-
-      // context before: scan backward from i-1 up to CONTEXT_WINDOW
-      const contextBefore: Array<{ text: string; lineNum: number }> = [];
-      for (let j = i - 1; j >= 0 && fileEvents[j]!.type === "context" && contextBefore.length < CONTEXT_WINDOW; j--) {
-        contextBefore.unshift({
-          text: stripNewline(fileEvents[j]!.data.lines.text),
-          lineNum: fileEvents[j]!.data.line_number as number,
-        });
-      }
-
-      // context after: scan forward from i+1 up to CONTEXT_WINDOW
-      const contextAfter: Array<{ text: string; lineNum: number }> = [];
-      for (let j = i + 1; j < fileEvents.length && fileEvents[j]!.type === "context" && contextAfter.length < CONTEXT_WINDOW; j++) {
-        contextAfter.push({
-          text: stripNewline(fileEvents[j]!.data.lines.text),
-          lineNum: fileEvents[j]!.data.line_number as number,
-        });
-      }
-
-      allResults.push({
-        text: stripNewline(match.data.lines.text),
-        source,
-        sourcePath,
-        line: match.data.line_number as number,
-        contextBefore,
-        contextAfter,
-        matchedTerms: (match.data.submatches as Array<{ match: { text: string } }>).map(
-          (s) => s.match.text.toLowerCase(),
-        ),
-        lineDate: parseLineDate(match.data.lines.text),
+    if (!fileMatches.has(filePath)) fileMatches.set(filePath, []);
+    for (const sm of ev.data.submatches as Array<{ match: { text: string } }>) {
+      fileMatches.get(filePath)!.push({
+        line: lineNum,
+        term: sm.match.text.toLowerCase(),
+        text,
       });
     }
   }
 
-  if (signal?.aborted) {
-    throw new Error("read_memory: aborted");
+  // For each file, check if distinct terms appear within windowLines
+  const proximityResults: CompactResult[] = [];
+  for (const [filePath, matches] of fileMatches) {
+    // Group matches by line (dedup)
+    const byLine = new Map<number, { text: string; terms: Set<string> }>();
+    for (const m of matches) {
+      if (!byLine.has(m.line)) byLine.set(m.line, { text: m.text, terms: new Set() });
+      byLine.get(m.line)!.terms.add(m.term);
+    }
+
+    const lineEntries = [...byLine.entries()].sort((a, b) => a[0] - b[0]);
+
+    // Sliding window: check each group of lines within windowLines
+    for (let i = 0; i < lineEntries.length; i++) {
+      const seenTerms = new Set(lineEntries[i][1].terms);
+      let end = i;
+
+      while (
+        end + 1 < lineEntries.length &&
+        lineEntries[end + 1][0] - lineEntries[i][0] <= windowLines
+      ) {
+        end++;
+        for (const t of lineEntries[end][1].terms) seenTerms.add(t);
+      }
+
+      // Check if at least 2 distinct original terms appear in this window
+      const origTermsInWindow = terms.filter((t) => seenTerms.has(t));
+      if (origTermsInWindow.length >= 2) {
+        // Pick the first line in the cluster
+        const first = lineEntries[i][1];
+        proximityResults.push({
+          text: first.text,
+          source: path.basename(filePath),
+          sourcePath: filePath,
+          line: lineEntries[i][0],
+          matchedTerms: origTermsInWindow,
+          lineDate: parseLineDate(first.text),
+        });
+        // Skip ahead past this cluster
+        i = end;
+      }
+    }
   }
 
-  // --- rank + dedup + recency (unchanged logic) ---
-  allResults.sort((a, b) => b.matchedTerms.length - a.matchedTerms.length);
-  const deduped = deduplicateResults(allResults);
-  deduped.sort((a, b) => {
-    const dateA = a.lineDate ?? parseFileDate(a.source);
-    const dateB = b.lineDate ?? parseFileDate(b.source);
-    const scoreA = a.matchedTerms.length * recencyMultiplier(dateA);
-    const scoreB = b.matchedTerms.length * recencyMultiplier(dateB);
-    return scoreB - scoreA;
-  });
-
+  const ranked = rankResults(proximityResults);
   return {
-    results: deduped.slice(0, MAX_RESULTS),
-    layer: "grep",
-    totalMatches: allResults.length,
+    results: ranked,
+    layer: "proximity",
+    totalMatches: proximityResults.length,
   };
 }
 
-function deduplicateResults(results: SearchResult[]): SearchResult[] {
-  const kept: SearchResult[] = [];
-  const seen = new Set<string>();
+/**
+ * Explicit fuzzy search: OR mode + full thesaurus expansion.
+ * Not used in auto-injection. Agent calls this when grepSearch fails.
+ */
+export async function fuzzySearch(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  if (signal?.aborted) throw new Error("read_memory: aborted");
 
-  for (const result of results) {
-    const key = `${result.source}:${Math.floor(result.line / (CONTEXT_WINDOW * 2))}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    kept.push(result);
+  const { freq, totalFiles } = computeCorpusFrequency();
+  const terms = extractDistinctiveTerms(query, freq, totalFiles);
+
+  if (terms.length === 0) {
+    return { results: [], layer: "fuzzy", totalMatches: 0 };
   }
 
-  return kept;
+  // Expand ALL terms with thesaurus
+  const thesaurus = loadThesaurus();
+  const expanded = new Set(terms);
+  for (const term of terms) {
+    const syns = thesaurus[term];
+    if (syns !== undefined) {
+      for (const s of syns) expanded.add(s);
+    }
+  }
+
+  // OR search: any term matches (original rg behavior)
+  const expandedTerms = [...expanded];
+  const termFlags: string[] = [];
+  for (const t of expandedTerms) termFlags.push("-e", t);
+
+  const dir = getMemoriesDir();
+  if (!fs.existsSync(dir)) {
+    return { results: [], layer: "fuzzy", totalMatches: 0 };
+  }
+
+  let rgStdout: string;
+  try {
+    const { stdout } = await execFileAsync(
+      "rg",
+      ["--json", "-n", "-F", "-i", ...termFlags, dir],
+      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
+    );
+    rgStdout = stdout;
+  } catch {
+    return { results: [], layer: "fuzzy", totalMatches: 0 };
+  }
+
+  const results: CompactResult[] = [];
+  for (const raw of rgStdout.trim().split("\n")) {
+    if (raw.length === 0) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (ev.type !== "match") continue;
+
+    const text = (ev.data.lines.text as string).replace(/\n$/, "");
+    results.push({
+      text,
+      source: path.basename(ev.data.path.text),
+      sourcePath: ev.data.path.text,
+      line: ev.data.line_number,
+      matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map(
+        (s) => s.match.text.toLowerCase(),
+      ),
+      lineDate: parseLineDate(text),
+    });
+  }
+
+  const ranked = rankResults(results);
+  return { results: ranked, layer: "fuzzy", totalMatches: results.length };
 }
