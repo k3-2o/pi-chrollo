@@ -157,7 +157,7 @@ export function extractDistinctiveTerms(
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 3 && !STOP_WORDS.has(w));
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
 
   if (raw.length === 0) return [];
 
