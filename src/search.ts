@@ -353,57 +353,9 @@ function rankResults(results: CompactResult[]): CompactResult[] {
 // --- Public API ---
 
 /**
- * OR search: any term matches. No frequency filter, no thesaurus.
- * Used as last resort when AND + progressive dropping all fail.
- */
-async function orSearch(
-  terms: string[],
-  signal?: AbortSignal,
-): Promise<CompactResult[]> {
-  const dir = getMemoriesDir();
-  if (!fs.existsSync(dir)) return [];
-
-  const flags: string[] = [];
-  for (const t of terms) flags.push("-e", t);
-
-  let stdout: string;
-  try {
-    const result = await execFileAsync(
-      "rg", ["--json", "-n", "-F", "-i", ...flags, dir],
-      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
-    );
-    stdout = result.stdout;
-  } catch {
-    return [];
-  }
-
-  const results: CompactResult[] = [];
-  for (const raw of stdout.trim().split("\n")) {
-    if (raw.length === 0) continue;
-    let ev;
-    try { ev = JSON.parse(raw); } catch { continue; }
-    if (ev.type !== "match") continue;
-    const text = (ev.data.lines.text as string).replace(/\n$/, "");
-    results.push({
-      text,
-      source: path.basename(ev.data.path.text),
-      sourcePath: ev.data.path.text,
-      line: ev.data.line_number,
-      matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map(
-        (s) => s.match.text.toLowerCase(),
-      ),
-      lineDate: parseLineDate(text),
-    });
-  }
-  return results;
-}
-
-/**
- * AND search with progressive fallback:
- * 1. AND all terms
- * 2. Thesaurus fallback (grouped AND with synonyms)
- * 3. Progressive AND (drop rarest term, retry)
- * 4. OR search with raw query (no frequency filter)
+ * AND search: all extracted terms must appear in the same file.
+ * Falls back to thesaurus expansion on the single most distinctive term
+ * if AND returns nothing.
  */
 export async function grepSearch(
   query: string,
@@ -443,31 +395,6 @@ export async function grepSearch(
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   if (groupedFiles.length === 0) {
-    // Step 3: Progressive AND — drop rarest terms, retry
-    for (let i = 1; i < terms.length; i++) {
-      const subset = terms.slice(i);
-      const files = await andSearch(subset, signal);
-      if (signal?.aborted) throw new Error("read_memory: aborted");
-      if (files.length > 0) {
-        const lines = await getMatchingLines(subset, files, signal);
-        return { results: rankResults(lines), layer: "and", totalMatches: lines.length };
-      }
-    }
-
-    // Step 4: Last resort — OR search with raw query (no frequency filter)
-    const rawTerms = query
-      .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
-
-    if (rawTerms.length > 0) {
-      const orLines = await orSearch(rawTerms, signal);
-      if (orLines.length > 0) {
-        return { results: rankResults(orLines), layer: "fuzzy", totalMatches: orLines.length };
-      }
-    }
-
     return { results: [], layer: "and+thesaurus", totalMatches: 0 };
   }
 
