@@ -171,10 +171,17 @@ export function extractDistinctiveTerms(
   scored.sort((a, b) => a.freqRatio - b.freqRatio);
 
   // Take top 5 that appear in less than 30% of files
-  return scored
+  const filtered = scored
     .filter((s) => s.freqRatio < 0.3)
     .slice(0, 5)
     .map((s) => s.word);
+
+  // If filter removed everything, fall back to raw query terms
+  if (filtered.length === 0 && raw.length > 0) {
+    return raw.slice(0, 3);
+  }
+
+  return filtered;
 }
 
 // --- AND search: all terms must appear in the same file ---
