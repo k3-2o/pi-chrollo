@@ -36,6 +36,15 @@ That's it. One script. Sub-second for a hundred sessions.
 ./scripts/import-pi-sessions.sh /path/to/sessions /path/to/memories
 ```
 
+### Why no tool calls? (the one inconsistency with native capture)
+
+Native Chrollo capture *does* write tool calls and their results — it follows the axiom *don't decide what's important at write time*, so it stays dumb and faithful. The importer deliberately doesn't. Different context, different rule:
+
+- **Native capture is live.** It can't know in the moment which command will matter later, so it keeps everything.
+- **The importer is a one-shot migration.** The sessions are already finished — the agent's prose conclusions already exist. Compression is the whole point, not faithfulness.
+
+For what Chrollo's memory store is actually used for — recency-grounded prose retrieval — tool calls are mostly tax. When an agent searches memory, the useful hits are the agent's reasoning and the user's framing, not the `bash`/`edit`/`read` invocations those conclusions came from. The raw JSONL at `~/.pi/agent/sessions/` remains the source of truth for execution detail if it's ever needed; the importer compresses into what the retrieval machinery can actually use.
+
 ### For other harnesses (Codex, Claude Code, etc.)
 
 The JSONL structure differs per harness. Same idea though — `jq` or a quick script to flatten messages into `[timestamp] [role]\ncontent` format. You'll know your own schema better than any generic importer would.

@@ -133,7 +133,9 @@ for f in "${files[@]}"; do
           | ($blocks | map(select(.type == "text") | (.text // "")) | join("\n")) as $text
           | ($blocks | map(select(.type == "toolCall") | format_tool_call(.name; .arguments // {}))) as $tool_lines
           | (if $text | test("\\S") then $text else "" end) as $clean_text
-          | (if ($tool_lines | length) > 0 then $clean_text + "\n\n" + ($tool_lines | join("\n")) else $clean_text end) as $combined
+          | (if ($tool_lines | length) > 0 then
+              (if $clean_text | length > 0 then $clean_text + "\n\n" else "" end) + ($tool_lines | join("\n"))
+            else $clean_text end) as $combined
           | select($combined | test("\\S"))
           | { role: $role, iso: .timestamp, text: $combined }
         ]
@@ -199,13 +201,22 @@ for f in "${files[@]}"; do
         (if ($parent | length) > 0 then "parent_session: \"\($parent)\"" else empty end),
         "---",
         "",
-        ( range(0; $msgs | length) as $i
-          | $msgs[$i] as $m
+        # Group consecutive same-role messages (matching native capture: one [Agent] block per turn)
+        (reduce range(0; $msgs | length) as $i (
+          { groups: [] };
+          $msgs[$i] as $m
           | $ts[$i] as $t
-          | "[\($t)] [\(if $m.role == "user" then "User" else "Agent" end)]",
-            (if $m.role == "user" then $m.text else quote_agent($m.text) end),
-            "",
-            ""
+          | if $i > 0 and $msgs[$i-1].role == $m.role then
+              .groups[-1].text += "\n\n" + $m.text
+            else
+              .groups += [{ role: $m.role, iso: $t, text: $m.text }]
+            end
+        ) | .groups[] as $g
+        | $g.iso as $t
+        | "[\($t)] [\(if $g.role == "user" then "User" else "Agent" end)]",
+          (if $g.role == "user" then $g.text else quote_agent($g.text) end),
+          "",
+          ""
         )
       ]
     | flatten
