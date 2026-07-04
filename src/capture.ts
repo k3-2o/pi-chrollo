@@ -28,7 +28,7 @@ export function formatToolCall(
     case "bash": {
       const cmd = args?.command;
       if (typeof cmd === "string") {
-        output.push(`$ ${cmd}`);
+        output.push(`<tool>$ ${cmd}</tool>`);
       }
       break;
     }
@@ -46,25 +46,25 @@ export function formatToolCall(
           }
         }
       }
-      output.push(parts.join(" "));
+      output.push(`<tool>${parts.join(" ")}</tool>`);
       break;
     }
     case "edit":
     case "write": {
       const path = args?.path ?? args?.file;
       if (typeof path === "string") {
-        output.push(`${name} ${path}`);
+        output.push(`<tool>${name} ${path}</tool>`);
       } else {
-        output.push(name);
+        output.push(`<tool>${name}</tool>`);
       }
       break;
     }
     default: {
       const firstArg = args ? Object.values(args).find((v) => typeof v === "string") : undefined;
       if (typeof firstArg === "string") {
-        output.push(`${name} ${firstArg}`);
+        output.push(`<tool>${name} ${firstArg}</tool>`);
       } else {
-        output.push(name);
+        output.push(`<tool>${name}</tool>`);
       }
       break;
     }

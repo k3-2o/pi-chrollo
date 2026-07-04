@@ -24,6 +24,9 @@
 #   - toolResult messages (native chrollo has no such role)
 #   - user/assistant messages whose visible text is empty or whitespace-only
 #
+# Tool calls (toolCall blocks) are captured and formatted as <tool>...</tool>,
+# matching the convention set by formatToolCall in capture.ts.
+#
 # Dedup: by session-id prefix (first 8 hex of the UUID), checked BEFORE jq.
 #
 # Usage:
@@ -92,7 +95,28 @@ for f in "${files[@]}"; do
 
   # --- Step 1: jq extracts everything as ONE JSON object ---
   # text stays as proper JSON strings (newlines preserved natively)
+  # Tool calls are formatted as <tool>...</tool> matching formatToolCall in capture.ts
   meta_json=$(sed 's/^[[:space:]]*//' "$f" | tr -d '\0' | jq -R -s '
+    # Format a tool call to match capture.ts formatToolCall
+    def format_tool_call(name; args):
+      if name == "bash" then
+        if args.command and (args.command | type) == "string" then
+          "<tool>$ \(args.command)</tool>"
+        else empty
+        end
+      elif (name == "read" or name == "read_memory" or name == "grep" or name == "find" or name == "ls") then
+        ([name] + ([args | to_entries[] | select(.value | type == "string") | .value][0:1])) | join(" ") | "<tool>\(.)</tool>"
+      elif (name == "edit" or name == "write") then
+        (args.path // args.file // null) as $p |
+        if $p and ($p | type) == "string" then
+          "<tool>\(name) \($p)</tool>"
+        else
+          "<tool>\(name)</tool>"
+        end
+      else
+        ([name] + ([args | to_entries[] | select(.value | type == "string") | .value][0:1])) | join(" ") | "<tool>\(.)</tool>"
+      end;
+
     (split("\n") | map(select(length > 0) | fromjson?)) as $rows
     | ([$rows[] | select(.type == "session")][0] // empty) as $s
     | select($s != null)
@@ -107,8 +131,11 @@ for f in "${files[@]}"; do
           | select($role == "user" or $role == "assistant")
           | (.message.content // []) as $blocks
           | ($blocks | map(select(.type == "text") | (.text // "")) | join("\n")) as $text
-          | select($text | test("\\S"))
-          | { role: $role, iso: .timestamp, text: $text }
+          | ($blocks | map(select(.type == "toolCall") | format_tool_call(.name; .arguments // {}))) as $tool_lines
+          | (if $text | test("\\S") then $text else "" end) as $clean_text
+          | (if ($tool_lines | length) > 0 then $clean_text + "\n\n" + ($tool_lines | join("\n")) else $clean_text end) as $combined
+          | select($combined | test("\\S"))
+          | { role: $role, iso: .timestamp, text: $combined }
         ]
       }
   ' 2>/dev/null) || { echo "  jq failed: $(basename "$f")" >&2; failed=$((failed+1)); continue; }

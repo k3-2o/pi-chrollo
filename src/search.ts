@@ -321,10 +321,32 @@ async function getMatchingLines(
       });
     }
 
-    return results;
+    return results.filter((r) => !isToolLine(r.text));
   } catch {
     return [];
   }
+}
+
+// --- Filter tool-call lines from search results ---
+// formatToolCall wraps every tool invocation in <tool>...</tool>,
+// making them trivially distinguishable from prose.
+// New captures use this marker. Existing pre-migration files use
+// heuristic fallbacks that are safe (path-based, never natural language).
+function isToolLine(text: string): boolean {
+  // Primary: <tool> marker set by formatToolCall (covers all tools)
+  if (/^>\s*<tool>/.test(text)) return true;
+
+  // Fallback heuristics for pre-migration files (will be removed once old files are cleaned)
+  return (
+    /^>\s+\$\s/.test(text) ||                            // > $ command
+    /^>\s+read_memory\s/.test(text) ||                    // > read_memory query
+    /^>\s+grep\s/.test(text) ||                           // > grep
+    /^>\s+ls\s/.test(text) ||                             // > ls
+    /^>\s+(read|edit|write|find)\s+(\/|\.\/|~\/|\w+\/)/.test(text) || // with path
+    /^>\s+read\s+\w+\.\w+/.test(text) ||                // read filename.ext
+    /^>\s+(edit|write)\s+\w+\.\w+/.test(text) ||        // edit/write filename.ext
+    /^>\s+[a-z][a-zA-Z0-9_]*_\w+\s/.test(text)          // underscore tool names (composio_*)
+  );
 }
 
 // --- Rank results by term density + recency ---
@@ -521,11 +543,12 @@ export async function proximitySearch(
     }
   }
 
-  const ranked = rankResults(proximityResults);
+  const cleanResults = proximityResults.filter((r) => !isToolLine(r.text));
+  const ranked = rankResults(cleanResults);
   return {
     results: ranked,
     layer: "proximity",
-    totalMatches: proximityResults.length,
+    totalMatches: cleanResults.length,
   };
 }
 
@@ -602,6 +625,7 @@ export async function fuzzySearch(
     });
   }
 
-  const ranked = rankResults(results);
-  return { results: ranked, layer: "fuzzy", totalMatches: results.length };
+  const cleanResults = results.filter((r) => !isToolLine(r.text));
+  const ranked = rankResults(cleanResults);
+  return { results: ranked, layer: "fuzzy", totalMatches: cleanResults.length };
 }
