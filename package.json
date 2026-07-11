@@ -1,6 +1,6 @@
 {
   "name": "@k3_2o/pi-chrollo",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Agentic memory for Pi — verbatim session capture + grep retrieval",
   "keywords": [
     "pi-package",
