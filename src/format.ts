@@ -41,7 +41,11 @@ export function renderResult(
     content: Array<{ type: string; text?: string }>;
     details?: { totalMatches?: number; sessionCount?: number };
   },
-  { expanded, isPartial, context }: { expanded: boolean; isPartial: boolean; context?: { isError?: boolean } },
+  {
+    expanded,
+    isPartial,
+    context,
+  }: { expanded: boolean; isPartial: boolean; context?: { isError?: boolean } },
   theme: {
     fg: (style: string, text: string) => string;
     dim: (text: string) => string;
@@ -49,9 +53,8 @@ export function renderResult(
   _toolConfig: unknown,
 ): Text {
   if (context?.isError) {
-    const errorText = result.content?.[0]?.type === "text"
-      ? result.content[0].text
-      : "read_memory: aborted";
+    const errorText =
+      result.content?.[0]?.type === "text" ? result.content[0].text : "read_memory: aborted";
     return new Text(theme.fg("error", `\u2717 ${errorText}`), 0, 0);
   }
 

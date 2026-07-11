@@ -32,24 +32,151 @@ const PROXIMITY_WINDOW = 20; // --- default lines for proximity search ---
 // --- Stopwords (trimmed — no more "remember", "talked", "thing" etc) ---
 
 const STOP_WORDS = new Set([
-  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "shall", "can", "need", "dare", "ought",
-  "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-  "as", "into", "through", "during", "before", "after", "above", "below",
-  "between", "out", "off", "over", "under", "again", "further", "then",
-  "once", "here", "there", "when", "where", "why", "how", "all", "both",
-  "each", "few", "more", "most", "other", "some", "such", "no", "nor",
-  "not", "only", "own", "same", "so", "than", "too", "very", "just",
-  "because", "but", "and", "or", "if", "while", "about", "up", "down",
-  "what", "which", "who", "whom", "this", "that", "these", "those",
-  "i", "me", "my", "myself", "we", "our", "ours", "ourselves",
-  "you", "your", "yours", "yourself", "yourselves",
-  "he", "him", "his", "himself", "she", "her", "hers", "herself",
-  "it", "its", "itself", "they", "them", "their", "theirs", "themselves",
-  "also", "get", "got", "like", "know", "think", "want", "look",
-  "use", "find", "give", "tell", "say", "said", "take", "come",
-  "make", "go", "see",
+  "the",
+  "a",
+  "an",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "shall",
+  "can",
+  "need",
+  "dare",
+  "ought",
+  "used",
+  "to",
+  "of",
+  "in",
+  "for",
+  "on",
+  "with",
+  "at",
+  "by",
+  "from",
+  "as",
+  "into",
+  "through",
+  "during",
+  "before",
+  "after",
+  "above",
+  "below",
+  "between",
+  "out",
+  "off",
+  "over",
+  "under",
+  "again",
+  "further",
+  "then",
+  "once",
+  "here",
+  "there",
+  "when",
+  "where",
+  "why",
+  "how",
+  "all",
+  "both",
+  "each",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "no",
+  "nor",
+  "not",
+  "only",
+  "own",
+  "same",
+  "so",
+  "than",
+  "too",
+  "very",
+  "just",
+  "because",
+  "but",
+  "and",
+  "or",
+  "if",
+  "while",
+  "about",
+  "up",
+  "down",
+  "what",
+  "which",
+  "who",
+  "whom",
+  "this",
+  "that",
+  "these",
+  "those",
+  "i",
+  "me",
+  "my",
+  "myself",
+  "we",
+  "our",
+  "ours",
+  "ourselves",
+  "you",
+  "your",
+  "yours",
+  "yourself",
+  "yourselves",
+  "he",
+  "him",
+  "his",
+  "himself",
+  "she",
+  "her",
+  "hers",
+  "herself",
+  "it",
+  "its",
+  "itself",
+  "they",
+  "them",
+  "their",
+  "theirs",
+  "themselves",
+  "also",
+  "get",
+  "got",
+  "like",
+  "know",
+  "think",
+  "want",
+  "look",
+  "use",
+  "find",
+  "give",
+  "tell",
+  "say",
+  "said",
+  "take",
+  "come",
+  "make",
+  "go",
+  "see",
 ]);
 
 // --- Helpers ---
@@ -186,10 +313,7 @@ export function extractDistinctiveTerms(
 
 // --- AND search: all terms must appear in the same file ---
 
-async function andSearch(
-  terms: string[],
-  signal?: AbortSignal,
-): Promise<string[]> {
+async function andSearch(terms: string[], signal?: AbortSignal): Promise<string[]> {
   const dir = getMemoriesDir();
   if (!fs.existsSync(dir)) return [];
 
@@ -197,12 +321,19 @@ async function andSearch(
 
   for (const term of terms) {
     try {
-      const { stdout } = await execFileAsync(
-        "rg",
-        ["-l", "-i", "-F", "-e", term, dir],
-        { signal, timeout: 3000, maxBuffer: 1024 * 1024 },
+      const { stdout } = await execFileAsync("rg", ["-l", "-i", "-F", "-e", term, dir], {
+        signal,
+        timeout: 3000,
+        maxBuffer: 1024 * 1024,
+      });
+      fileSets.push(
+        new Set(
+          stdout
+            .trim()
+            .split("\n")
+            .filter((l) => l.length > 0),
+        ),
       );
-      fileSets.push(new Set(stdout.trim().split("\n").filter((l) => l.length > 0)));
     } catch {
       // rg exits 1 when no match — that means AND fails
       return [];
@@ -238,11 +369,17 @@ async function groupedAndSearch(
 
   let topFiles: Set<string>;
   try {
-    const { stdout } = await execFileAsync(
-      "rg", ["-l", "-i", "-F", ...topFlags, dir],
-      { signal, timeout: 3000, maxBuffer: 1024 * 1024 },
+    const { stdout } = await execFileAsync("rg", ["-l", "-i", "-F", ...topFlags, dir], {
+      signal,
+      timeout: 3000,
+      maxBuffer: 1024 * 1024,
+    });
+    topFiles = new Set(
+      stdout
+        .trim()
+        .split("\n")
+        .filter((l) => l.length > 0),
     );
-    topFiles = new Set(stdout.trim().split("\n").filter((l) => l.length > 0));
   } catch {
     return [];
   }
@@ -253,11 +390,17 @@ async function groupedAndSearch(
   let result = topFiles;
   for (const term of remainingTerms) {
     try {
-      const { stdout } = await execFileAsync(
-        "rg", ["-l", "-i", "-F", "-e", term, dir],
-        { signal, timeout: 3000, maxBuffer: 1024 * 1024 },
+      const { stdout } = await execFileAsync("rg", ["-l", "-i", "-F", "-e", term, dir], {
+        signal,
+        timeout: 3000,
+        maxBuffer: 1024 * 1024,
+      });
+      const termFiles = new Set(
+        stdout
+          .trim()
+          .split("\n")
+          .filter((l) => l.length > 0),
       );
-      const termFiles = new Set(stdout.trim().split("\n").filter((l) => l.length > 0));
       result = new Set([...result].filter((x) => termFiles.has(x)));
       if (result.size === 0) return [];
     } catch {
@@ -314,8 +457,8 @@ async function getMatchingLines(
         source: path.basename(ev.data.path.text),
         sourcePath: ev.data.path.text,
         line: ev.data.line_number,
-        matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map(
-          (s) => s.match.text.toLowerCase(),
+        matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map((s) =>
+          s.match.text.toLowerCase(),
         ),
         lineDate: parseLineDate(text),
       });
@@ -338,14 +481,14 @@ function isToolLine(text: string): boolean {
 
   // Fallback heuristics for pre-migration files (will be removed once old files are cleaned)
   return (
-    /^>\s+\$\s/.test(text) ||                            // > $ command
-    /^>\s+read_memory\s/.test(text) ||                    // > read_memory query
-    /^>\s+grep\s/.test(text) ||                           // > grep
-    /^>\s+ls\s/.test(text) ||                             // > ls
+    /^>\s+\$\s/.test(text) || // > $ command
+    /^>\s+read_memory\s/.test(text) || // > read_memory query
+    /^>\s+grep\s/.test(text) || // > grep
+    /^>\s+ls\s/.test(text) || // > ls
     /^>\s+(read|edit|write|find)\s+(\/|\.\/|~\/|\w+\/)/.test(text) || // with path
-    /^>\s+read\s+\w+\.\w+/.test(text) ||                // read filename.ext
-    /^>\s+(edit|write)\s+\w+\.\w+/.test(text) ||        // edit/write filename.ext
-    /^>\s+[a-z][a-zA-Z0-9_]*_\w+\s/.test(text)          // underscore tool names (composio_*)
+    /^>\s+read\s+\w+\.\w+/.test(text) || // read filename.ext
+    /^>\s+(edit|write)\s+\w+\.\w+/.test(text) || // edit/write filename.ext
+    /^>\s+[a-z][a-zA-Z0-9_]*_\w+\s/.test(text) // underscore tool names (composio_*)
   );
 }
 
@@ -379,10 +522,7 @@ function rankResults(results: CompactResult[]): CompactResult[] {
  * Falls back to thesaurus expansion on the single most distinctive term
  * if AND returns nothing.
  */
-export async function grepSearch(
-  query: string,
-  signal?: AbortSignal,
-): Promise<SearchResponse> {
+export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   const { freq, totalFiles } = computeCorpusFrequency();
@@ -450,15 +590,7 @@ export async function proximitySearch(
     const ctxLines = Math.ceil(windowLines / 2);
     const { stdout } = await execFileAsync(
       "rg",
-      [
-        "--json",
-        "-n",
-        "-F",
-        "-i",
-        "-C", String(ctxLines),
-        ...termFlags,
-        dir,
-      ],
+      ["--json", "-n", "-F", "-i", "-C", String(ctxLines), ...termFlags, dir],
       { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
     );
     rgStdout = stdout;
@@ -556,10 +688,7 @@ export async function proximitySearch(
  * Explicit fuzzy search: OR mode + full thesaurus expansion.
  * Not used in auto-injection. Agent calls this when grepSearch fails.
  */
-export async function fuzzySearch(
-  query: string,
-  signal?: AbortSignal,
-): Promise<SearchResponse> {
+export async function fuzzySearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   const { freq, totalFiles } = computeCorpusFrequency();
@@ -591,11 +720,11 @@ export async function fuzzySearch(
 
   let rgStdout: string;
   try {
-    const { stdout } = await execFileAsync(
-      "rg",
-      ["--json", "-n", "-F", "-i", ...termFlags, dir],
-      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
-    );
+    const { stdout } = await execFileAsync("rg", ["--json", "-n", "-F", "-i", ...termFlags, dir], {
+      signal,
+      timeout: 3000,
+      maxBuffer: 5 * 1024 * 1024,
+    });
     rgStdout = stdout;
   } catch {
     return { results: [], layer: "fuzzy", totalMatches: 0 };
@@ -618,8 +747,8 @@ export async function fuzzySearch(
       source: path.basename(ev.data.path.text),
       sourcePath: ev.data.path.text,
       line: ev.data.line_number,
-      matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map(
-        (s) => s.match.text.toLowerCase(),
+      matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map((s) =>
+        s.match.text.toLowerCase(),
       ),
       lineDate: parseLineDate(text),
     });

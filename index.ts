@@ -11,7 +11,12 @@ import {
   setActiveMemoriesDir,
   type SessionFrontmatter,
 } from "./src/storage.js";
-import { grepSearch, proximitySearch, computeCorpusFrequency, extractDistinctiveTerms } from "./src/search.js";
+import {
+  grepSearch,
+  proximitySearch,
+  computeCorpusFrequency,
+  extractDistinctiveTerms,
+} from "./src/search.js";
 import { formatResultsForContext, renderCall, renderResult } from "./src/format.js";
 import { extractText, formatToolCall } from "./src/capture.js";
 import { getMemoryStats } from "./src/stats.js";
@@ -196,15 +201,16 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "read_memory",
     label: "Read Memory",
-    description:
-      "This is your memory. Search past conversations for relevant context. Returns compact results — file:line | text. Use read <path> --offset <N> --limit <M> to expand context. Searches with AND mode (all terms must appear in same file) for precision. If you need broader recall, try again with different keywords.",
-    promptSnippet: "Search past conversations",
-    promptGuidelines: [
-      "Use read_memory when you need to recall context from past conversations. Each result is one line: file:line | text. Use read <path> --offset <N> --limit <M> to read around the lines identified.",
-      "Do not read entire memory files. The returned lines are sufficient to answer. If you need more context, expand the reading window around the line numbers.",
-      "Use read_memory as automatically as you use read or write — reach for it without being asked, and decode indirect questions into search queries.",
-      "This is your memory. Explore it, question it, build from it. Not by fetching facts, but by remembering. Indirect questions, vague asks treat them as invitations to recall. Use it freely.",
-    ],
+    description: `Search past conversations for relevant context.
+
+Returns compact results — file:line | text. Each result is a single matching line from a memory file. It is NOT full context — it is a map marker telling you where relevant information lives. You must read the surrounding context using read <path> --offset <N> --limit <M> around each reported line. Do not treat the one-liner as sufficient.
+
+Searches with AND mode — all search terms must appear in the same file for a match. Use distinctive keywords. If nothing comes up, try different terms or use broader recall.
+
+Examples:
+  "kanagawa palette obsidian" — search for color palette discussions
+  "dotfiles brew linux" — search for linux setup memories
+  "chrollo search fix" — find previous work on the search layer`,
     parameters: Type.Object({
       query: Type.String({
         description:
