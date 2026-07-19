@@ -16,6 +16,7 @@ import {
   proximitySearch,
   computeCorpusFrequency,
   extractDistinctiveTerms,
+  invalidateCorpusCache,
 } from "./src/search.js";
 import { formatResultsForContext, renderCall, renderResult } from "./src/format.js";
 import { extractText, formatToolCall } from "./src/capture.js";
@@ -37,9 +38,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   let pendingSession: PendingSession | undefined;
   let lastUserPrompt: string | undefined;
   let sessionMeta: PendingSession | undefined;
-
-  // --- Cache corpus frequency for term extraction across the session ---
-  let corpusFreqCache: { freq: Map<string, number>; totalFiles: number } | undefined;
 
   // --- Lifecycle: session_start ---
 
@@ -65,8 +63,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       pendingSession = { ...sessionMeta };
     }
 
-    // Pre-warm corpus frequency cache
-    corpusFreqCache = computeCorpusFrequency();
+    // Fresh corpus cache each session (AD-2): invalidate any stale module cache
+    // from a prior session in this process, then pre-warm (async + persisted).
+    invalidateCorpusCache();
+    void computeCorpusFrequency(); // fire-and-forget warm-up; awaits on first use
 
     const stats = getMemoryStats();
     if (ctx.hasUI) {
@@ -139,6 +139,9 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     if (filePath === undefined) return;
 
     appendTurn(filePath, lastUserPrompt, fullAgentText, new Date());
+    // New words were just written -> drop the in-memory cache so the next search
+    // reflects the updated corpus (AD-2). The persisted cache is rebuilt lazily.
+    invalidateCorpusCache();
     lastUserPrompt = undefined;
   });
 
@@ -150,8 +153,8 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     // Skip short prompts
     if (event.prompt.length < 10) return;
 
-    // Extract distinctive terms using corpus frequency
-    const cache = corpusFreqCache ?? computeCorpusFrequency();
+    // Extract distinctive terms using corpus frequency (async + persisted cache)
+    const cache = await computeCorpusFrequency();
     const distinctTerms = extractDistinctiveTerms(event.prompt, cache.freq, cache.totalFiles);
 
     if (distinctTerms.length < 2) return; // too vague for proximity
@@ -193,7 +196,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     currentMemoryFile = undefined;
     lastUserPrompt = undefined;
     sessionMeta = undefined;
-    corpusFreqCache = undefined;
+    invalidateCorpusCache();
   });
 
   // --- Tool: read_memory ---

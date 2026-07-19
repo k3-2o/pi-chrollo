@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { singlePassAndSearch, grepSearch } from "../src/search";
+import { singlePassAndSearch, grepSearch, invalidateCorpusCache } from "../src/search";
 import { setActiveMemoriesDir } from "../src/storage";
 
 // Integration tests for the single-pass AND search (AD-4) against a temp
@@ -45,10 +45,13 @@ beforeEach(() => {
   writeFixture("4", FIXTURES.fileD);
   // Point chrollo at our temp corpus.
   setActiveMemoriesDir(tmpRoot);
+  // Fresh corpus cache per test (persists to disk; avoid cross-test staleness).
+  invalidateCorpusCache();
 });
 
 afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
+  invalidateCorpusCache();
 });
 
 describe("singlePassAndSearch", () => {

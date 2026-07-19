@@ -1,6 +1,7 @@
 // --- Chrollo Search Layer ---
 
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -229,11 +230,40 @@ export function recencyMultiplier(lineDate: Date | undefined): number {
 }
 
 // --- Corpus word frequency (for filtering common words) ---
+// Persisted to .chrollo/freq.json (the parent of the memories dir, NOT inside
+// memories/ — otherwise it'd be scanned as a memory file). Fingerprinted by
+// (fileCount, totalBytes) so it's reused only when the corpus is unchanged;
+// rebuilt lazily on first search after any change. Invalidated explicitly on
+// session_start and after each agent_end append (see invalidateCorpusCache()).
 
 let _corpusFreqCache: Map<string, number> | null = null;
 let _corpusTotalFiles = 0;
 
-export function computeCorpusFrequency(): { freq: Map<string, number>; totalFiles: number } {
+// --- Invalidate the in-memory cache. Call at session_start and after each
+//     successful append so the next search sees the new words (AD-2). ---
+export function invalidateCorpusCache(): void {
+  _corpusFreqCache = null;
+  _corpusTotalFiles = 0;
+}
+
+function corpusCachePath(): string {
+  // parent of the memories dir = the .chrollo/ (or global) root
+  return path.join(path.dirname(getMemoriesDir()), "freq.json");
+}
+
+interface PersistedFreq {
+  fileCount: number;
+  totalBytes: number;
+  freq: Array<[string, number]>;
+}
+
+// --- Compute (or reuse) the corpus frequency map. Async + persisted.
+//     Reads files in parallel via fs/promises; falls back to empty if the
+//     memories dir is absent. Public so index.ts can pre-warm at session_start. ---
+export async function computeCorpusFrequency(): Promise<{
+  freq: Map<string, number>;
+  totalFiles: number;
+}> {
   if (_corpusFreqCache !== null) {
     return { freq: _corpusFreqCache, totalFiles: _corpusTotalFiles };
   }
@@ -245,20 +275,79 @@ export function computeCorpusFrequency(): { freq: Map<string, number>; totalFile
     return { freq: _corpusFreqCache, totalFiles: 0 };
   }
 
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
-  const freq = new Map<string, number>();
+  const files = (await fsp.readdir(dir)).filter((f) => f.endsWith(".md"));
 
-  for (const file of files) {
-    const content = fs.readFileSync(path.join(dir, file), "utf-8");
-    const words = new Set(tokenize(content));
-    for (const word of words) {
+  // Fingerprint: count + total bytes. If the persisted cache matches, reuse it.
+  let totalBytes = 0;
+  const statTasks = files.map(async (f) => {
+    const st = await fsp.stat(path.join(dir, f));
+    totalBytes += st.size;
+    return st.size;
+  });
+  await Promise.all(statTasks);
+
+  const reused = tryLoadPersisted(corpusCachePath(), files.length, totalBytes);
+  if (reused !== null) {
+    _corpusFreqCache = reused.freq;
+    _corpusTotalFiles = files.length;
+    return { freq: reused.freq, totalFiles: files.length };
+  }
+
+  // Cold: read + tokenize all files in parallel, then aggregate.
+  const freq = new Map<string, number>();
+  const contents = await Promise.all(files.map((f) => fsp.readFile(path.join(dir, f), "utf-8")));
+  for (const content of contents) {
+    for (const word of new Set(tokenize(content))) {
       freq.set(word, (freq.get(word) ?? 0) + 1);
     }
   }
 
   _corpusFreqCache = freq;
   _corpusTotalFiles = files.length;
+  trySavePersisted(corpusCachePath(), files.length, totalBytes, freq);
   return { freq, totalFiles: files.length };
+}
+
+// --- Persisted-cache helpers (best-effort; any failure just means a rebuild). ---
+
+function tryLoadPersisted(
+  cachePath: string,
+  fileCount: number,
+  totalBytes: number,
+): { freq: Map<string, number> } | null {
+  try {
+    const raw = fs.readFileSync(cachePath, "utf-8");
+    const parsed = JSON.parse(raw) as PersistedFreq;
+    if (
+      parsed.fileCount === fileCount &&
+      parsed.totalBytes === totalBytes &&
+      Array.isArray(parsed.freq)
+    ) {
+      return { freq: new Map(parsed.freq) };
+    }
+  } catch {
+    // missing or corrupt -> rebuild
+  }
+  return null;
+}
+
+function trySavePersisted(
+  cachePath: string,
+  fileCount: number,
+  totalBytes: number,
+  freq: Map<string, number>,
+): void {
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const payload: PersistedFreq = {
+      fileCount,
+      totalBytes,
+      freq: [...freq.entries()],
+    };
+    fs.writeFileSync(cachePath, JSON.stringify(payload), "utf-8");
+  } catch {
+    // best-effort; ignore write failures
+  }
 }
 
 // --- Smart term extraction: 5 max, filtered by corpus frequency ---
@@ -433,7 +522,7 @@ export function rankResults(results: CompactResult[]): CompactResult[] {
 export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
-  const { freq, totalFiles } = computeCorpusFrequency();
+  const { freq, totalFiles } = await computeCorpusFrequency();
   const terms = extractDistinctiveTerms(query, freq, totalFiles);
 
   if (terms.length === 0) {
