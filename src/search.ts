@@ -325,44 +325,86 @@ export function extractDistinctiveTerms(
   return filtered;
 }
 
-// --- AND search: all terms must appear in the same file ---
-
-async function andSearch(terms: string[], signal?: AbortSignal): Promise<string[]> {
+// --- Single-pass AND search (AD-4) ---
+// One `rg --json` call for ALL terms (matches any term), then compute the
+// file-level AND in JS: keep only files whose matched-term set covers every
+// query term. The same pass yields the matching lines for free, so there is
+// no separate line-fetch step. Replaces the old N-serial-`rg -l` + second
+// `rg --json` (which spawned N+1 processes and blew the 50ms inject budget).
+export async function singlePassAndSearch(
+  terms: string[],
+  signal?: AbortSignal,
+): Promise<{ files: string[]; lines: CompactResult[] }> {
   const dir = getMemoriesDir();
-  if (!fs.existsSync(dir)) return [];
+  if (!fs.existsSync(dir) || terms.length === 0) {
+    return { files: [], lines: [] };
+  }
 
-  const fileSets: Set<string>[] = [];
+  const termFlags: string[] = [];
+  for (const term of terms) termFlags.push("-e", term);
+  const termSet = new Set(terms.map((t) => t.toLowerCase()));
 
-  for (const term of terms) {
+  let stdout: string;
+  try {
+    const res = await execFileAsync("rg", ["--json", "-n", "-F", "-i", ...termFlags, "--", dir], {
+      signal,
+      timeout: 3000,
+      maxBuffer: 5 * 1024 * 1024,
+    });
+    stdout = res.stdout;
+  } catch {
+    // rg exits 1 when no match at all → AND yields nothing.
+    return { files: [], lines: [] };
+  }
+
+  // Per file: which query terms matched, and all matching lines.
+  const fileTerms = new Map<string, Set<string>>();
+  const allLines: CompactResult[] = [];
+
+  for (const raw of stdout.split("\n")) {
+    if (raw.length === 0) continue;
+    let ev: any;
     try {
-      const { stdout } = await execFileAsync("rg", ["-l", "-i", "-F", "-e", term, dir], {
-        signal,
-        timeout: 3000,
-        maxBuffer: 1024 * 1024,
-      });
-      fileSets.push(
-        new Set(
-          stdout
-            .trim()
-            .split("\n")
-            .filter((l) => l.length > 0),
-        ),
-      );
+      ev = JSON.parse(raw);
     } catch {
-      // rg exits 1 when no match — that means AND fails
-      return [];
+      continue;
     }
+    if (ev.type !== "match") continue;
+
+    const filePath: string = ev.data.path.text;
+    const text: string = (ev.data.lines.text as string).replace(/\n$/, "");
+    const matchedHere = (ev.data.submatches as Array<{ match: { text: string } }>).map((s) =>
+      s.match.text.toLowerCase(),
+    );
+
+    if (!fileTerms.has(filePath)) fileTerms.set(filePath, new Set());
+    const bucket = fileTerms.get(filePath)!;
+    for (const t of matchedHere) if (termSet.has(t)) bucket.add(t);
+
+    allLines.push({
+      text,
+      source: path.basename(filePath),
+      sourcePath: filePath,
+      line: ev.data.line_number as number,
+      matchedTerms: matchedHere,
+      lineDate: parseLineDate(text),
+    });
   }
 
-  // Intersect all file sets
-  if (fileSets.length === 0) return [];
-  let result = fileSets[0];
-  for (let i = 1; i < fileSets.length; i++) {
-    result = new Set([...result].filter((x) => fileSets[i].has(x)));
-    if (result.size === 0) return [];
+  // File-level AND: keep only files whose matched-query-term set covers all terms.
+  const andFiles: string[] = [];
+  for (const [file, matched] of fileTerms) {
+    if (terms.every((t) => matched.has(t.toLowerCase()))) andFiles.push(file);
   }
+  if (andFiles.length === 0) return { files: [], lines: [] };
 
-  return [...result];
+  // Keep only lines from AND-passing files, drop tool-call lines.
+  const andFileSet = new Set(andFiles);
+  const lines = allLines
+    .filter((r) => andFileSet.has(r.sourcePath))
+    .filter((r) => !isToolLine(r.text));
+
+  return { files: andFiles, lines };
 }
 
 /**
@@ -547,14 +589,13 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
     return { results: [], layer: "and", totalMatches: 0 };
   }
 
-  // Step 1: AND search — all terms must appear in same file
-  const andFiles = await andSearch(terms, signal);
+  // Step 1: single-pass AND — one rg call, file-level AND in JS, lines for free
+  const { files: andFiles, lines: andLines } = await singlePassAndSearch(terms, signal);
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   if (andFiles.length > 0) {
-    const lines = await getMatchingLines(terms, andFiles, signal);
-    const ranked = rankResults(lines);
-    return { results: ranked, layer: "and", totalMatches: lines.length };
+    const ranked = rankResults(andLines);
+    return { results: ranked, layer: "and", totalMatches: andLines.length };
   }
 
   // Step 2: Thesaurus fallback — expand most distinctive term, AND with remaining
@@ -697,79 +738,4 @@ export async function proximitySearch(
     layer: "proximity",
     totalMatches: cleanResults.length,
   };
-}
-
-/**
- * Explicit fuzzy search: OR mode + full thesaurus expansion.
- * Not used in auto-injection. Agent calls this when grepSearch fails.
- */
-export async function fuzzySearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
-  if (signal?.aborted) throw new Error("read_memory: aborted");
-
-  const { freq, totalFiles } = computeCorpusFrequency();
-  const terms = extractDistinctiveTerms(query, freq, totalFiles);
-
-  if (terms.length === 0) {
-    return { results: [], layer: "fuzzy", totalMatches: 0 };
-  }
-
-  // Expand ALL terms with thesaurus
-  const thesaurus = loadThesaurus();
-  const expanded = new Set(terms);
-  for (const term of terms) {
-    const syns = thesaurus[term];
-    if (syns !== undefined) {
-      for (const s of syns) expanded.add(s);
-    }
-  }
-
-  // OR search: any term matches (original rg behavior)
-  const expandedTerms = [...expanded];
-  const termFlags: string[] = [];
-  for (const t of expandedTerms) termFlags.push("-e", t);
-
-  const dir = getMemoriesDir();
-  if (!fs.existsSync(dir)) {
-    return { results: [], layer: "fuzzy", totalMatches: 0 };
-  }
-
-  let rgStdout: string;
-  try {
-    const { stdout } = await execFileAsync("rg", ["--json", "-n", "-F", "-i", ...termFlags, dir], {
-      signal,
-      timeout: 3000,
-      maxBuffer: 5 * 1024 * 1024,
-    });
-    rgStdout = stdout;
-  } catch {
-    return { results: [], layer: "fuzzy", totalMatches: 0 };
-  }
-
-  const results: CompactResult[] = [];
-  for (const raw of rgStdout.trim().split("\n")) {
-    if (raw.length === 0) continue;
-    let ev: any;
-    try {
-      ev = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    if (ev.type !== "match") continue;
-
-    const text = (ev.data.lines.text as string).replace(/\n$/, "");
-    results.push({
-      text,
-      source: path.basename(ev.data.path.text),
-      sourcePath: ev.data.path.text,
-      line: ev.data.line_number,
-      matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map((s) =>
-        s.match.text.toLowerCase(),
-      ),
-      lineDate: parseLineDate(text),
-    });
-  }
-
-  const cleanResults = results.filter((r) => !isToolLine(r.text));
-  const ranked = rankResults(cleanResults);
-  return { results: ranked, layer: "fuzzy", totalMatches: cleanResults.length };
 }
