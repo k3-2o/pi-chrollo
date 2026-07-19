@@ -15,7 +15,6 @@ node_modules/
 dist/
 .DS_Store
 *.log
-.chrollo/
 .vscode/
 
 # --- npm internals (excluded by default; listed for clarity) ---

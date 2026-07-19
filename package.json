@@ -1,7 +1,7 @@
 {
   "name": "@k3_2o/pi-chrollo",
   "version": "0.2.0",
-  "description": "Agentic memory for Pi — verbatim session capture + grep retrieval",
+  "description": "Retrieval layer over Pi's native sessions — ripgrep + JSONL, zero own storage",
   "keywords": [
     "pi-package",
     "memory",
@@ -20,7 +20,7 @@
   "scripts": {
     "format": "prettier --write 'index.ts' 'src/*.ts'",
     "format:check": "prettier --check 'index.ts' 'src/*.ts'",
-    "smoke": "tsx -e \"import './src/capture'; import './src/storage'; import './src/stats'; import './src/search'; console.log('OK')\"",
+    "smoke": "tsx -e \"import './index'; console.log('OK')\"",
     "check": "npm run format:check && npm run smoke"
   },
   "devDependencies": {

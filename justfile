@@ -6,13 +6,14 @@
 default:
     @just --list
 
-# Format all source (writes)
+# Format all source (writes). `find` yields zero args when src/ is empty
+# (e.g. mid-rewrite), so prettier never sees a non-matching glob.
 fmt:
-    npx prettier --write 'index.ts' 'src/*.ts' 'test/**/*.ts' 'vitest.config.ts'
+    npx prettier --write index.ts vitest.config.ts $(find src test -name '*.ts' 2>/dev/null)
 
 # Read-only format check
 lint:
-    npx prettier --check 'index.ts' 'src/*.ts' 'test/**/*.ts' 'vitest.config.ts'
+    npx prettier --check index.ts vitest.config.ts $(find src test -name '*.ts' 2>/dev/null)
 
 # Smoke import test (catches broken modules / unresolved imports)
 smoke:
@@ -37,7 +38,3 @@ ci: check types test
 clean:
     rm -rf node_modules/.cache .vitest
     find . -type d -name 'test-results' -prune -exec rm -rf {} +
-
-# Truncate the metrics sidecar (keeps the file, clears contents)
-clean-metrics:
-    @if [ -f .chrollo/metrics.jsonl ]; then : > .chrollo/metrics.jsonl; echo "cleared .chrollo/metrics.jsonl"; else echo "no metrics file"; fi
