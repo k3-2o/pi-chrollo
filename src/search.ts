@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getMemoriesDir } from "./storage.js";
+import { recordMetric } from "./metrics.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,7 +21,7 @@ export interface CompactResult {
 
 export interface SearchResponse {
   results: CompactResult[];
-  layer: "and" | "proximity";
+  layer: "and" | "proximity" | "trigram";
   totalMatches: number;
 }
 
@@ -197,6 +198,107 @@ export function tokenize(text: string): string[] {
     .toLowerCase()
     .split(/\s+/)
     .filter((w) => w.length > 2);
+}
+
+// --- Light stemming (AD-11): strip ONE common suffix from words longer than 4
+//     chars, keeping the root if it's >= 3 chars. Because ripgrep -F matches
+//     SUBSTRINGS, grepping the stem catches all inflections at once:
+//     stem("deployment")="deploy" matches deploy/deploys/deploying/deployed/deployment.
+//     This partially offsets the recall lost when the thesaurus was removed (AD-7).
+//     Over-stem guard: skip if root would be < 3 chars ("using"->"us" is rejected).
+//     Trade-off: "er" occasionally over-matches (docker->dock), mitigated by the
+//     corpus-frequency rarity filter downstream.
+const STEM_SUFFIXES = ["ment", "ion", "ing", "ed", "er", "es", "s"]; // longest first
+export function stem(word: string): string {
+  if (word.length <= 4) return word; // too short to stem safely
+  for (const suf of STEM_SUFFIXES) {
+    if (word.endsWith(suf)) {
+      const root = word.slice(0, word.length - suf.length);
+      if (root.length >= 3) return root; // don't over-stem to a fragment
+      break; // suffix found but root too short -> keep original
+    }
+  }
+  return word;
+}
+
+// --- Expand a term into [term, stem] when stemming changes it. Each entry is a
+//     grep pattern (OR within the group); the AND search requires every GROUP
+//     to match, not every literal. ---
+export function groupWithStem(term: string): string[] {
+  const s = stem(term);
+  return s !== term ? [term, s] : [term];
+}
+
+// --- Trigram typo fallback (AD-12): as a last resort, split a term into 3-char
+//     trigrams and OR them as a regex. Catches typos (recieve<->receive share
+//     'rec' and 'ive') and partial spellings without embeddings. Only fires on
+//     AND-miss, only for terms length>=4. Returns null if the term is too short
+//     to produce >=2 trigrams. ---
+export function trigramRegex(term: string): string | null {
+  if (term.length < 4) return null;
+  const trigrams: string[] = [];
+  for (let i = 0; i + 3 <= term.length; i++) {
+    trigrams.push(term.slice(i, i + 3));
+  }
+  // dedup + need at least 2 to be meaningful
+  const uniq = [...new Set(trigrams)];
+  if (uniq.length < 2) return null;
+  return `(${uniq.join("|")})`;
+}
+
+// --- Last-resort trigram OR search across all query terms. Loosens AND to OR
+//     (any term's trigrams match). Results are flagged layer 'trigram'. ---
+async function trigramFallback(terms: string[], signal?: AbortSignal): Promise<SearchResponse> {
+  const dir = getMemoriesDir();
+  if (!fs.existsSync(dir)) return { results: [], layer: "trigram", totalMatches: 0 };
+
+  // Build one combined alternation from every term's trigrams (OR across all).
+  const allPatterns: string[] = [];
+  for (const t of terms) {
+    const r = trigramRegex(t);
+    if (r !== null) allPatterns.push(r);
+  }
+  if (allPatterns.length === 0) return { results: [], layer: "trigram", totalMatches: 0 };
+  const combined = allPatterns.join("|");
+
+  let stdout: string;
+  try {
+    const res = await execFileAsync(
+      // NOTE: no -F (this is a regex, not a fixed string)
+      "rg",
+      ["--json", "-n", "-i", "-e", combined, "--", dir],
+      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
+    );
+    stdout = res.stdout;
+  } catch {
+    return { results: [], layer: "trigram", totalMatches: 0 };
+  }
+
+  const results: CompactResult[] = [];
+  for (const raw of stdout.split("\n")) {
+    if (raw.length === 0) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (ev.type !== "match") continue;
+    const text = (ev.data.lines.text as string).replace(/\n$/, "");
+    results.push({
+      text,
+      source: path.basename(ev.data.path.text),
+      sourcePath: ev.data.path.text,
+      line: ev.data.line_number as number,
+      matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map((s) =>
+        s.match.text.toLowerCase(),
+      ),
+      lineDate: parseLineDate(text),
+    });
+  }
+
+  const clean = results.filter((r) => !isToolLine(r.text));
+  return { results: rankResults(clean), layer: "trigram", totalMatches: clean.length };
 }
 
 // --- Parse a memory filename's date as LOCAL time.
@@ -400,9 +502,24 @@ export async function singlePassAndSearch(
     return { files: [], lines: [] };
   }
 
+  // Expand each term into a [term, stem] group (AD-11). ripgrep -F matches
+  // substrings, so grepping a stem catches all its inflections. AND is now
+  // group-level: every GROUP must be matched (any literal in it), not every
+  // literal.
+  const groups = terms.map(groupWithStem);
+  const patterns = groups.flat();
+
   const termFlags: string[] = [];
-  for (const term of terms) termFlags.push("-e", term);
-  const termSet = new Set(terms.map((t) => t.toLowerCase()));
+  for (const p of patterns) termFlags.push("-e", p);
+  // Map each lowercased literal -> the group indices it can satisfy.
+  const literalToGroups = new Map<string, Set<number>>();
+  groups.forEach((g, gi) => {
+    for (const lit of g) {
+      const k = lit.toLowerCase();
+      if (!literalToGroups.has(k)) literalToGroups.set(k, new Set());
+      literalToGroups.get(k)!.add(gi);
+    }
+  });
 
   let stdout: string;
   try {
@@ -417,8 +534,8 @@ export async function singlePassAndSearch(
     return { files: [], lines: [] };
   }
 
-  // Per file: which query terms matched, and all matching lines.
-  const fileTerms = new Map<string, Set<string>>();
+  // Per file: which GROUPS matched (not literals), and all matching lines.
+  const fileGroups = new Map<string, Set<number>>();
   const allLines: CompactResult[] = [];
 
   for (const raw of stdout.split("\n")) {
@@ -437,9 +554,12 @@ export async function singlePassAndSearch(
       s.match.text.toLowerCase(),
     );
 
-    if (!fileTerms.has(filePath)) fileTerms.set(filePath, new Set());
-    const bucket = fileTerms.get(filePath)!;
-    for (const t of matchedHere) if (termSet.has(t)) bucket.add(t);
+    if (!fileGroups.has(filePath)) fileGroups.set(filePath, new Set());
+    const bucket = fileGroups.get(filePath)!;
+    for (const t of matchedHere) {
+      const gis = literalToGroups.get(t);
+      if (gis !== undefined) for (const gi of gis) bucket.add(gi);
+    }
 
     allLines.push({
       text,
@@ -451,10 +571,11 @@ export async function singlePassAndSearch(
     });
   }
 
-  // File-level AND: keep only files whose matched-query-term set covers all terms.
+  // File-level AND (group-aware): keep only files where EVERY group is
+  // satisfied by at least one matched literal.
   const andFiles: string[] = [];
-  for (const [file, matched] of fileTerms) {
-    if (terms.every((t) => matched.has(t.toLowerCase()))) andFiles.push(file);
+  for (const [file, coveredGroups] of fileGroups) {
+    if (groups.every((_, gi) => coveredGroups.has(gi))) andFiles.push(file);
   }
   if (andFiles.length === 0) return { files: [], lines: [] };
 
@@ -530,17 +651,28 @@ export function rankResults(results: CompactResult[]): CompactResult[] {
 
 /**
  * AND search: all extracted terms must appear in the same file.
- * On AND-miss, returns empty — the agent re-searches with different words
- * (thesaurus removed in AD-7; WordNet polysemy made it net-negative).
+ * On AND-miss, falls back to a trigram typo search (AD-12); the thesaurus
+ * was removed in AD-7 (WordNet polysemy made it net-negative).
  */
 export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
+  const started = Date.now();
+  const track = (res: SearchResponse): SearchResponse => {
+    recordMetric({
+      kind: "search",
+      latencyMs: Date.now() - started,
+      resultCount: res.results.length,
+      aborted: signal?.aborted === true,
+    });
+    return res;
+  };
+
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   const { freq, totalFiles } = await computeCorpusFrequency();
   const terms = extractDistinctiveTerms(query, freq, totalFiles);
 
   if (terms.length === 0) {
-    return { results: [], layer: "and", totalMatches: 0 };
+    return track({ results: [], layer: "and", totalMatches: 0 });
   }
 
   // Step 1: single-pass AND — one rg call, file-level AND in JS, lines for free
@@ -549,12 +681,13 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
 
   if (andFiles.length > 0) {
     const ranked = rankResults(andLines);
-    return { results: ranked, layer: "and", totalMatches: andLines.length };
+    return track({ results: ranked, layer: "and", totalMatches: andLines.length });
   }
 
-  // AND-miss: thesaurus fallback removed (AD-7). Return empty; the agent
-  // iterates with different terms (axiom 2: the agent is always in the loop).
-  return { results: [], layer: "and", totalMatches: 0 };
+  // AND-miss: last-resort trigram typo fallback (AD-12). Loosens to OR across
+  // 3-char sub-patterns so typos / partial spellings still surface something.
+  if (signal?.aborted) throw new Error("read_memory: aborted");
+  return track(await trigramFallback(terms, signal));
 }
 
 /**
@@ -566,9 +699,20 @@ export async function proximitySearch(
   windowLines: number = PROXIMITY_WINDOW,
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
+  const started = Date.now();
+  const track = (res: SearchResponse): SearchResponse => {
+    recordMetric({
+      kind: "inject",
+      latencyMs: Date.now() - started,
+      resultCount: res.results.length,
+      aborted: signal?.aborted === true,
+    });
+    return res;
+  };
+
   const dir = getMemoriesDir();
   if (!fs.existsSync(dir) || terms.length < 2) {
-    return { results: [], layer: "proximity", totalMatches: 0 };
+    return track({ results: [], layer: "proximity", totalMatches: 0 });
   }
 
   // rg with context window around each match, then check term proximity in JS
@@ -587,7 +731,8 @@ export async function proximitySearch(
     );
     rgStdout = stdout;
   } catch {
-    return { results: [], layer: "proximity", totalMatches: 0 };
+    // rg throws on abort (50ms budget) or no-match. Record + return empty.
+    return track({ results: [], layer: "proximity", totalMatches: 0 });
   }
 
   if (signal?.aborted) throw new Error("read_memory: aborted");
@@ -669,9 +814,9 @@ export async function proximitySearch(
 
   const cleanResults = proximityResults.filter((r) => !isToolLine(r.text));
   const ranked = rankResults(cleanResults);
-  return {
+  return track({
     results: ranked,
     layer: "proximity",
     totalMatches: cleanResults.length,
-  };
+  });
 }

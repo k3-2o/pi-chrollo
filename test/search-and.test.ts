@@ -117,10 +117,19 @@ describe("grepSearch (single-pass AND via public API)", () => {
     expect(res.results.every((r) => r.sourcePath.includes("aa.md"))).toBe(true);
   });
 
-  it("returns empty (not junk) when no file has all terms", async () => {
+  it("AND-miss falls back to trigram layer (AD-12), not empty", async () => {
+    // 'alpha nonexistentterm' has no file with BOTH terms, so AND misses.
+    // The trigram fallback then loosens to OR and surfaces partial matches.
     const res = await grepSearch("alpha nonexistentterm");
+    expect(res.layer).toBe("trigram");
+    // results are loose trigram matches (not AND-strict), so non-empty is fine
+    expect(Array.isArray(res.results)).toBe(true);
+  });
+
+  it("returns empty only when nothing matches even via trigrams", async () => {
+    // terms with no trigram overlap to anything in the fixtures
+    const res = await grepSearch("qqqxwz zzzvqk");
     expect(res.results).toEqual([]);
-    expect(res.layer).toBe("and"); // never "and+thesaurus" anymore (AD-7)
     expect(res.totalMatches).toBe(0);
   });
 });

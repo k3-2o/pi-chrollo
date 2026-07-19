@@ -22,6 +22,7 @@ import { formatResultsForContext, renderCall, renderResult } from "./src/format.
 import { extractText, formatToolCall } from "./src/capture.js";
 import { getMemoryStats } from "./src/stats.js";
 import { topicChanged, filterInjected, recordInjected } from "./src/inject.js";
+import { recordMetric } from "./src/metrics.js";
 
 // --- Types ---
 
@@ -205,7 +206,15 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
         },
       };
     } catch {
-      return; // timeout or abort — skip ambient injection
+      // timeout or abort — skip ambient injection, but record it so the
+      // 50ms budget failures are visible in metrics.jsonl (AD-13).
+      recordMetric({
+        kind: "inject",
+        latencyMs: 50, // the budget that was exceeded
+        resultCount: 0,
+        aborted: true,
+      });
+      return;
     } finally {
       clearTimeout(timer);
     }
