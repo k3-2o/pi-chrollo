@@ -6,6 +6,7 @@ import {
   recordInjected,
   isTrivialPrompt,
   sameTerms,
+  decideAmbientSearch,
 } from "../src/inject";
 import type { CompactResult } from "../src/search";
 
@@ -157,5 +158,43 @@ describe("filterInjected + recordInjected", () => {
     const results = [mk("/a.md", 1), mk("/b.md", 2)];
     recordInjected(results, injected);
     expect(filterInjected(results, injected)).toEqual([]);
+  });
+});
+
+describe("decideAmbientSearch (F-02 integration)", () => {
+  it("skips when the distinctive terms are identical to the previous prompt", () => {
+    const first = decideAmbientSearch(["chrollo", "search"], new Set(), new Set());
+    expect(first.skip).toBe(false);
+    const second = decideAmbientSearch(
+      ["chrollo", "search"],
+      first.lastDistinctTerms,
+      new Set(["/x.md:1"]),
+    );
+    expect(second.skip).toBe(true); // identical terms + already injected
+  });
+
+  it("does NOT skip when the terms changed on the same topic (overlap)", () => {
+    const first = decideAmbientSearch(["chrollo", "search"], new Set(), new Set());
+    expect(first.skip).toBe(false);
+    const second = decideAmbientSearch(
+      ["chrollo", "ranking"], // shares "chrollo" but adds new term "ranking"
+      first.lastDistinctTerms,
+      new Set(["/x.md:1"]),
+    );
+    expect(second.skip).toBe(false); // a new sub-question should re-search
+  });
+
+  it("resets injectedKeys on a full topic change, then does not skip", () => {
+    const first = decideAmbientSearch(["chrollo", "search"], new Set(), new Set(["/x.md:1"]));
+    expect(first.skip).toBe(false);
+    expect(first.injectedKeys.size).toBe(1); // preserved if no topic change
+
+    const second = decideAmbientSearch(
+      ["postgres", "setup"], // no overlap with [chrollo, search]
+      first.lastDistinctTerms,
+      first.injectedKeys,
+    );
+    expect(second.skip).toBe(false); // new topic, not skipped
+    expect(second.injectedKeys.size).toBe(0); // reset
   });
 });

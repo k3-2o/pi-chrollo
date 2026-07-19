@@ -169,8 +169,8 @@ export function decideAmbientSearch(
   //     Same distinctive terms means the same rg query -> same results ->
   //     dedup would filter them all anyway. If even one term changed (a new
   //     sub-question on the same topic), re-search — there might be new matches.
+  const skip = nextKeys.size > 0 && sameTerms(lastDistinctTerms, currentTerms);
   const updatedLastDistinctTerms = currentTerms;
-  const skip = nextKeys.size > 0 && sameTerms(updatedLastDistinctTerms, currentTerms);
 
   return { skip, injectedKeys: nextKeys, lastDistinctTerms: updatedLastDistinctTerms };
 }
