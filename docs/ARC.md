@@ -51,15 +51,14 @@ Layer 3: the agent iterates — re-search with different words (axiom 2)
 
 Term extraction splits camelCase / snake_case / kebab-case identifiers (so `optimizeRerenders` is searchable as "optimize") and applies light stemming (`deployment` → `deploy`; ripgrep `-F` substring-matching then catches every inflection at once). A corpus-frequency filter drops words appearing in >30% of files. The frequency index is a **synchronous module-level cache**, built once at `session_start` (~280ms) and reused for every prompt that session; cleared at `session_shutdown` so the next session rebuilds fresh.
 
-Results ranked by IDF-weighted matched terms, then recency-boosted (access-reinforced):
+Results ranked by IDF-weighted matched terms, then recency-boosted:
 
 ```
 recencyMultiplier = 1 + exp(-daysSince / 43)
-                      max(creationDecay, 0.7 × accessDecay)  // if referenced
-finalScore = Σ(idf(term)) × recencyMultiplier(lineDate, lastAccessed)
+finalScore = Σ(idf(term)) × recencyMultiplier(lineDate)
 ```
 
-Rare terms (high IDF) outweigh common ones; recently-referenced memories stay fresh longer than their creation age would suggest.
+Rare terms (high IDF) outweigh common ones; recent memories (30-day half-life) rank above older ones.
 
 Per-file diversity cap (max 3 from any one session), global cap at 20.
 
@@ -69,7 +68,7 @@ Three Pi hooks and one tool:
 
 - **`before_agent_start`** — captures the prompt. Runs a proximity search with a 50ms budget and injects relevant memories as a hidden custom message (`display: false`). Gated: skips trivial prompts (acknowledgements, greetings) and prompts whose distinctive terms haven't changed since the last injection (same search → same results → dedup filters them all).
 - **`agent_end`** — builds chronological sections from assistant messages (text → tool calls → text → ...). Appends the turn to the memory file. Creates the file on first write (lazy creation).
-- **`session_shutdown`** — clears all state (corpus cache, access cache, injected-keys set). No data persists between sessions.
+- **`session_shutdown`** — clears all state (corpus cache, injected-keys set). No data persists between sessions.
 - **`read_memory(query)`** — searches past conversations via single-pass AND + trigram fallback. Returns compact `path:line | text` markers. The agent reads around matches with `read --offset --limit` rather than reading full files.
 
 ---
@@ -88,7 +87,7 @@ Three Pi hooks and one tool:
 | **Memory injection**  | Hidden (`display: false`)            | The agent gets context without choosing to look. No preamble telling the agent "these are files on disk" — that would constrain behavioral shaping. No TUI display — that turns ambient recall into a wall of file paths every turn. The agent treats injected context as its own knowledge.         |
 | **I/O model**         | Synchronous (not async)              | Pi event handlers must run atomically. Async I/O destroyed atomicity in 0.2.0 — `session_start` couldn't guarantee the corpus cache was warm before returning, so `before_agent_start` awaited a ~1.9s rebuild and froze the prompt box. Sync I/O in handlers that must run atomically is not a bug. |
 | **Synchronous cache** | Module-level (not persisted to disk) | Persisted corpus cache (`.chrollo/freq.json`) was reverted for the same atomicity reason. The module cache is rebuilt once per session (~280ms at `session_start`).                                                                                                                                  |
-| **Sidecar files**     | Derived, deletable files             | `.chrollo/access.json` (access timestamps) and `.chrollo/metrics.jsonl` (latency/abort log) are write-only caches. Deleting them loses no semantic data — the memory files are the source of truth.                                                                                                  |
+| **Sidecar files**     | Derived, deletable file              | `.chrollo/metrics.jsonl` (latency/abort log) is a write-only cache. Deleting it loses no semantic data — the memory files are the source of truth.                                                                                                                                                    |
 
 ### Search result format
 

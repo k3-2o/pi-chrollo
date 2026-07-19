@@ -32,7 +32,6 @@ import {
   type AmbientSearchDecision,
 } from "./src/inject.js";
 import { recordMetric } from "./src/metrics.js";
-import { invalidateAccessCache } from "./src/access.js";
 
 interface PendingSession {
   sessionId: string;
@@ -212,7 +211,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     injectedKeys = new Set();
     lastDistinctTerms = new Set();
     invalidateCorpusCache();
-    invalidateAccessCache();
   });
 
   // read_memory tool

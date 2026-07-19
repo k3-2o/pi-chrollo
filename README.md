@@ -34,7 +34,7 @@ This approach (verbatim raw text) scored **92.0% accuracy** on the [locomo](http
 - **Auto-capture** — every turn saved to `.chrollo/memories/` automatically (project-scoped or global)
 - **`read_memory` tool** — single-pass AND search with stemming and trigram typo fallback
 - **Smart injection** — proximity-based recall before each prompt, gated on non-trivial prompts with new distinctive terms
-- **Recency ranking** — line-level timestamps with 30-day half-life, access-reinforced decay, IDF-weighted term scoring
+- **Recency ranking** — line-level timestamps with 30-day half-life and IDF-weighted term scoring
 - **Observability** — `.chrollo/metrics.jsonl` records every search/inject with latency and abort status
 
 ## Comparison

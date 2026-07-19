@@ -6,7 +6,6 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getMemoriesDir } from "./storage.js";
 import { recordMetric } from "./metrics.js";
-import { getAccessMap, recordAccess } from "./access.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -297,8 +296,7 @@ async function trigramFallback(
   }
 
   const clean = results.filter((r) => !isToolLine(r.text));
-  const ranked = rankResults(clean, { accessMap: getAccessMap(), idfWeights });
-  recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
+  const ranked = rankResults(clean, { idfWeights });
   return { results: ranked, layer: "trigram", totalMatches: clean.length };
 }
 
@@ -321,25 +319,13 @@ export function parseLineDate(line: string): Date | undefined {
 
 // Recency multiplier: 30-day half-life exponential decay. today=2.0x,
 // week~1.85x, 3mo~1.13x, year~1.0x.
-export function recencyMultiplier(lineDate: Date | undefined, lastAccessed?: Date): number {
+export function recencyMultiplier(lineDate: Date | undefined): number {
   if (lineDate === undefined) return 1.0;
   const now = Date.now();
   const daysSince = (now - lineDate.getTime()) / (1000 * 60 * 60 * 24);
   if (daysSince < 0) return 1.0; // future-dated: no boost, no penalty
 
-  let decay = Math.exp(-daysSince / RECENCY_LAMBDA);
-
-  // Access reinforcement (Phase 10B): blend in access freshness at 70% strength.
-  // A memory you keep coming back to stays accessible longer than one you
-  // wrote once and forgot.
-  if (lastAccessed !== undefined) {
-    const daysSinceAccess = (now - lastAccessed.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSinceAccess >= 0) {
-      const accessDecay = Math.exp(-daysSinceAccess / RECENCY_LAMBDA) * 0.7;
-      decay = Math.max(decay, accessDecay);
-    }
-  }
-
+  const decay = Math.exp(-daysSince / RECENCY_LAMBDA);
   return 1 + RECENCY_BOOST * decay;
 }
 
@@ -548,7 +534,6 @@ function isToolLine(text: string): boolean {
 }
 
 export interface RankContext {
-  accessMap?: Map<string, Date>;
   idfWeights?: Map<string, number>;
 }
 
@@ -572,7 +557,7 @@ export function buildIdfWeights(
 }
 
 // Score result: IDF-weighted distinct terms × recency.
-function scoreResult(r: CompactResult, ctx: RankContext | undefined, key: string): number {
+function scoreResult(r: CompactResult, ctx: RankContext | undefined): number {
   const distinct = new Set(r.matchedTerms);
   let termScore: number;
   if (ctx?.idfWeights !== undefined && ctx.idfWeights.size > 0) {
@@ -581,7 +566,7 @@ function scoreResult(r: CompactResult, ctx: RankContext | undefined, key: string
   } else {
     termScore = distinct.size;
   }
-  return termScore * recencyMultiplier(r.lineDate, ctx?.accessMap?.get(key));
+  return termScore * recencyMultiplier(r.lineDate);
 }
 
 export function rankResults(results: CompactResult[], ctx?: RankContext): CompactResult[] {
@@ -595,12 +580,10 @@ export function rankResults(results: CompactResult[], ctx?: RankContext): Compac
     unique.push(r);
   }
 
-  // Sort: IDF-weighted term score × recency (IDF weights optional — falls back to distinct-term count). Access history reinforces recency (Phase 10B).
+  // Sort: IDF-weighted term score × recency (IDF weights optional — falls back to distinct-term count).
   unique.sort((a, b) => {
-    const aKey = `${a.sourcePath}:${a.line}`;
-    const bKey = `${b.sourcePath}:${b.line}`;
-    const aScore = scoreResult(a, ctx, aKey);
-    const bScore = scoreResult(b, ctx, bKey);
+    const aScore = scoreResult(a, ctx);
+    const bScore = scoreResult(b, ctx);
     return bScore - aScore;
   });
 
@@ -649,8 +632,7 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   if (andFiles.length > 0) {
-    const ranked = rankResults(andLines, { accessMap: getAccessMap(), idfWeights });
-    recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
+    const ranked = rankResults(andLines, { idfWeights });
     return track({ results: ranked, layer: "and", totalMatches: andLines.length });
   }
 
@@ -782,8 +764,7 @@ export async function proximitySearch(
   const cleanResults = proximityResults.filter((r) => !isToolLine(r.text));
   const { freq: proxFreq, totalFiles: proxTotal } = computeCorpusFrequency();
   const proxIdf = buildIdfWeights(terms, proxFreq, proxTotal);
-  const ranked = rankResults(cleanResults, { accessMap: getAccessMap(), idfWeights: proxIdf });
-  recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
+  const ranked = rankResults(cleanResults, { idfWeights: proxIdf });
   return track({
     results: ranked,
     layer: "proximity",

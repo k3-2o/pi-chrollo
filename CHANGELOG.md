@@ -89,7 +89,7 @@ rendering latency for actual recall. See `docs/ARC.md`.
 ## [Unreleased] — Smart Retrieval (Phase 10)
 
 Post-0.2.0 optimizations from the frontier-memory research synthesis. All stay
-in-paradigm: no LLM calls, no embeddings, no extraction. 140 tests green.
+in-paradigm: no LLM calls, no embeddings, no extraction. 133 tests green.
 
 ### Proactive injection (10A)
 
@@ -101,21 +101,23 @@ in-paradigm: no LLM calls, no embeddings, no extraction. 140 tests green.
   dedup would filter them all). A single new term re-triggers.
 - Directly addresses the 50ms-budget aborts documented in ARC.
 
-### Access-reinforced decay (10B)
-
-- **Access sidecar** — `.chrollo/access.json` tracks when each memory line was
-  last referenced (via `read_memory` or injection). Derived cache, deletable,
-  synchronous I/O.
-- **Blended recency** — `recencyMultiplier(lineDate, lastAccessed?)` blends
-  creation-age decay with access-age decay at 70% strength. Frequently-read
-  memories stay accessible longer than their creation age alone would allow.
-
 ### IDF-weighted ranking (10C)
 
 - **`buildIdfWeights`** — `log(1 + totalFiles / (1 + freq))` per matched term.
   Rare terms (`k3s`) outweigh common ones (`config`) in the score.
-- **`rankResults`** now takes a `RankContext { accessMap?, idfWeights? }`. Falls
+- **`rankResults`** now takes a `RankContext { idfWeights? }`. Falls
   back to flat distinct-term counting when no IDF weights are provided.
+
+> **Note on reverted work (10B — access-reinforced decay):** Phase 10 originally
+> shipped an access-tracking sidecar (`.chrollo/access.json`) that recorded when
+> each memory line was last read/injected and blended it into the recency score.
+> **It was reverted before release.** The blend (`max(creationDecay, 0.7 ×
+> accessDecay)`) was conservative and never hurt accuracy, but it added a
+> sidecar file, I/O on every search, and a threaded `RankContext` — all to solve
+> a problem nobody reported. The 30-day recency half-life already keeps memories
+> around a long time, and the agent can always re-search with different
+> keywords. This is the same shape as the async-I/O revert: an elegant-on-paper
+> feature that added complexity without demonstrated value. See `docs/ARC.md`.
 
 ### Adversarial audit fixes
 
