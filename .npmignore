@@ -1,0 +1,24 @@
+# --- .npmignore ---
+# Controls what ships in the npm tarball. NOTE: once this file exists, npm
+# stops reading .gitignore for packing — so anything that must stay OUT of the
+# published package has to be listed HERE too.
+
+# --- Runtime-unneeded dev files (keep in git, drop from tarball) ---
+test/
+tsconfig.json
+vitest.config.ts
+justfile
+.prettierrc.json
+
+# --- Must replicate .gitignore (npm ignores .gitignore once .npmignore exists) ---
+node_modules/
+dist/
+.DS_Store
+*.log
+.chrollo/
+.vscode/
+
+# --- npm internals (excluded by default; listed for clarity) ---
+.git/
+.gitignore
+npm-debug.*
