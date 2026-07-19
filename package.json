@@ -20,7 +20,7 @@
   "scripts": {
     "format": "prettier --write 'index.ts' 'src/*.ts'",
     "format:check": "prettier --check 'index.ts' 'src/*.ts'",
-    "smoke": "tsx -e \"import './index'; console.log('OK')\"",
+    "smoke": "tsx -e \"import './index'; import './src/tokenize'; import './src/bm25'; console.log('OK')\"",
     "check": "npm run format:check && npm run smoke"
   },
   "devDependencies": {
