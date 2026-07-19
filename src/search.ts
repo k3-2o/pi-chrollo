@@ -374,6 +374,16 @@ interface PersistedFreq {
 // --- Compute (or reuse) the corpus frequency map. Async + persisted.
 //     Reads files in parallel via fs/promises; falls back to empty if the
 //     memories dir is absent. Public so index.ts can pre-warm at session_start. ---
+// --- Peek at the warm cache SYNCHRONOUSLY, or return null if not ready.
+//     Used by before_agent_start so the prompt path never blocks on a corpus
+//     read. Auto-injection is best-effort: if the cache isn't warm yet (first
+//     prompt of a session, or a rebuild still in flight), skip injection for
+//     that one prompt rather than freezing the prompt box for up to 1.9s. ---
+export function peekCorpusCache(): { freq: Map<string, number>; totalFiles: number } | null {
+  if (_corpusFreqCache === null) return null;
+  return { freq: _corpusFreqCache, totalFiles: _corpusTotalFiles };
+}
+
 export async function computeCorpusFrequency(): Promise<{
   freq: Map<string, number>;
   totalFiles: number;

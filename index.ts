@@ -15,6 +15,7 @@ import {
   grepSearch,
   proximitySearch,
   computeCorpusFrequency,
+  peekCorpusCache,
   extractDistinctiveTerms,
   invalidateCorpusCache,
 } from "./src/search.js";
@@ -168,8 +169,13 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     // Skip short prompts
     if (event.prompt.length < 10) return;
 
-    // Extract distinctive terms using corpus frequency (async + persisted cache)
-    const cache = await computeCorpusFrequency();
+    // BEST-EFFORT auto-injection: peek at the cache SYNCHRONOUSLY. Never block
+    // the prompt box on a corpus read. If the cache isn't warm yet (first prompt
+    // of a session, or a rebuild still in flight), skip injection for this one
+    // prompt — the agent doesn't die, it just gets no ambient memory for a turn.
+    // The cache is pre-warmed at session_start (fire-and-forget).
+    const cache = peekCorpusCache();
+    if (cache === null) return;
     const distinctTerms = extractDistinctiveTerms(event.prompt, cache.freq, cache.totalFiles);
 
     if (distinctTerms.length < 2) return; // too vague for proximity
