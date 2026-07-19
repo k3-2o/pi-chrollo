@@ -21,7 +21,13 @@ import {
 import { formatResultsForContext, renderCall, renderResult } from "./src/format.js";
 import { extractText, formatToolCall } from "./src/capture.js";
 import { getMemoryStats } from "./src/stats.js";
-import { topicChanged, filterInjected, recordInjected } from "./src/inject.js";
+import {
+  topicChanged,
+  filterInjected,
+  recordInjected,
+  isTrivialPrompt,
+  sameTerms,
+} from "./src/inject.js";
 import { recordMetric } from "./src/metrics.js";
 
 // --- Types ---
@@ -160,8 +166,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event, _ctx) => {
     lastUserPrompt = event.prompt;
 
-    // Skip short prompts
-    if (event.prompt.length < 10) return;
+    // --- GATE 1 (Phase 10A): skip trivial prompts. Acknowledgements, greetings,
+    //     thanks, continuations carry nothing worth a memory search. Skipping
+    //     them keeps the 50ms budget for prompts that actually need it.
+    if (event.prompt.length < 10 || isTrivialPrompt(event.prompt)) return;
 
     // Read the corpus cache SYNCHRONOUSLY. It was pre-warmed at session_start,
     // so this is always instant — no async, no mid-handler yield, no prompt-box
@@ -177,6 +185,12 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     const currentTerms = new Set(distinctTerms);
     if (topicChanged(lastDistinctTerms, currentTerms)) injectedKeys = new Set();
     lastDistinctTerms = currentTerms;
+
+    // --- GATE 2 (Phase 10A): identical terms + already injected -> skip.
+    //     Same distinctive terms means the same rg query -> same results ->
+    //     dedup would filter them all anyway. If even one term changed (a new
+    //     sub-question on the same topic), re-search — there might be new matches.
+    if (injectedKeys.size > 0 && sameTerms(lastDistinctTerms, currentTerms)) return;
 
     // Proximity search with hard 50ms timeout
     const controller = new AbortController();

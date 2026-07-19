@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { dedupKey, topicChanged, filterInjected, recordInjected } from "../src/inject";
+import {
+  dedupKey,
+  topicChanged,
+  filterInjected,
+  recordInjected,
+  isTrivialPrompt,
+  sameTerms,
+} from "../src/inject";
 import type { CompactResult } from "../src/search";
 
 // Phase 6: injection dedup (AD-10) — pure helpers.
@@ -17,6 +24,76 @@ function mk(path: string, line: number): CompactResult {
 describe("dedupKey", () => {
   it("builds a stable sourcePath:line key", () => {
     expect(dedupKey(mk("/a/b.md", 42))).toBe("/a/b.md:42");
+  });
+});
+
+describe("sameTerms (Phase 10A Gate 2)", () => {
+  it("true for identical sets regardless of insertion order", () => {
+    expect(sameTerms(new Set(["a", "b"]), new Set(["b", "a"]))).toBe(true);
+  });
+
+  it("false when sizes differ (new term added)", () => {
+    expect(sameTerms(new Set(["a", "b"]), new Set(["a", "b", "c"]))).toBe(false);
+  });
+
+  it("false when any term differs (a swap)", () => {
+    expect(sameTerms(new Set(["a", "b"]), new Set(["a", "c"]))).toBe(false);
+  });
+
+  it("true for two empty sets", () => {
+    expect(sameTerms(new Set(), new Set())).toBe(true);
+  });
+});
+
+describe("isTrivialPrompt (Phase 10A gate)", () => {
+  it("flags pure acknowledgements", () => {
+    expect(isTrivialPrompt("yes")).toBe(true);
+    expect(isTrivialPrompt("ok")).toBe(true);
+    expect(isTrivialPrompt("okay cool")).toBe(true);
+    expect(isTrivialPrompt("gotcha")).toBe(true);
+    expect(isTrivialPrompt("nope")).toBe(true);
+  });
+
+  it("flags greetings", () => {
+    expect(isTrivialPrompt("hi")).toBe(true);
+    expect(isTrivialPrompt("hello hey")).toBe(true);
+    expect(isTrivialPrompt("yo")).toBe(true);
+  });
+
+  it("flags thanks", () => {
+    expect(isTrivialPrompt("thanks")).toBe(true);
+    expect(isTrivialPrompt("thank you")).toBe(true);
+    expect(isTrivialPrompt("thx")).toBe(true);
+  });
+
+  it("flags continuations", () => {
+    expect(isTrivialPrompt("continue")).toBe(true);
+    expect(isTrivialPrompt("go ahead")).toBe(true);
+    expect(isTrivialPrompt("keep going")).toBe(true);
+    expect(isTrivialPrompt("next")).toBe(true);
+  });
+
+  it("passes prompts with real searchable content", () => {
+    expect(isTrivialPrompt("how do I configure kanagawa in obsidian")).toBe(false);
+    expect(isTrivialPrompt("fix the search bug")).toBe(false);
+    expect(isTrivialPrompt("yes that worked but now I need to set up k3s")).toBe(false);
+    expect(isTrivialPrompt("what did we decide about postgres")).toBe(false);
+  });
+
+  it("passes even a single distinctive word", () => {
+    expect(isTrivialPrompt("chrollo")).toBe(false);
+    expect(isTrivialPrompt("postgres")).toBe(false);
+    expect(isTrivialPrompt("deployment")).toBe(false);
+  });
+
+  it("handles punctuation (strips it before checking)", () => {
+    expect(isTrivialPrompt("ok, thanks!")).toBe(true);
+    expect(isTrivialPrompt("yes.")).toBe(true);
+  });
+
+  it("treats empty/whitespace as trivial", () => {
+    expect(isTrivialPrompt("")).toBe(true);
+    expect(isTrivialPrompt("   ")).toBe(true);
   });
 });
 
