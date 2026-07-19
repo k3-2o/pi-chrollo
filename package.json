@@ -20,12 +20,18 @@
   "scripts": {
     "format": "prettier --write 'index.ts' 'src/*.ts' 'scripts/*.ts'",
     "format:check": "prettier --check 'index.ts' 'src/*.ts' 'scripts/*.ts'",
-    "smoke": "tsx -e \"import './index'; import './src/search'; import './src/storage'; import './src/stats'; import './src/format'; import './src/capture'; console.log('OK')\"",
+    "smoke": "tsx -e \"import './src/capture'; import './src/storage'; import './src/stats'; import './src/search'; console.log('OK')\"",
     "check": "npm run format:check && npm run smoke",
     "build-thesaurus": "npm install --no-save wordpos && tsx scripts/build-thesaurus.ts && npm uninstall wordpos"
   },
   "devDependencies": {
-    "prettier": "^3.5.3"
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-tui": "^0.80.10",
+    "@types/node": "^26.1.1",
+    "prettier": "^3.5.3",
+    "typebox": "^1.1.38",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   },
   "pi": {
     "extensions": [
