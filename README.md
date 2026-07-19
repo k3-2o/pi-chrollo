@@ -48,6 +48,7 @@ This approach (verbatim raw text) scored **92.0% accuracy** on the [locomo](http
 
 ## Where to Go Next
 
+- **[Tutorial](docs/TUTORIAL.md)** — 5-minute walkthrough: install, capture, search
 - **[Architecture & Design](docs/ARC.md)** — how Chrollo works, trade-offs, what's not built
 - **[How-to Guides](docs/GUIDES.md)** — project-scoped storage, import, monitoring, search tips
 - **[Importing Existing Sessions](IMPORT.md)** — bring your Pi history into Chrollo
