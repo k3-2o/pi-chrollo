@@ -15,12 +15,12 @@
 
 Every other memory system was designed for non-agentic retrieval — one-shot, no LLM in the loop. They optimize retrieval benchmark scores. But in agentic systems, the agent is always there. It can read, reason, iterate, and search again. This changes what a retrieval engine needs to do.
 
-The PwC paper *"Is Grep All You Need?"* ([arXiv:2605.15184](https://arxiv.org/abs/2605.15184), May 2026) validated this: in agentic contexts, grep-based retrieval matches or exceeds vector search at near-zero cost because the agent iterates. Chrollo pushes further — no vectors, no BM25, no embeddings. Just ripgrep + WordNet thesaurus + an agent that knows how to think.
+The PwC paper *"Is Grep All You Need?"* ([arXiv:2605.15184](https://arxiv.org/abs/2605.15184), May 2026) validated this: in agentic contexts, grep-based retrieval matches or exceeds vector search at near-zero cost because the agent iterates. Chrollo pushes further — no vectors, no BM25, no embeddings. Just ripgrep + light stemming + an agent that knows how to think.
 
 ### The Approach
 
 ```
-verbatim storage + grep + thesaurus + recency + agent reads + agent iterates
+verbatim storage + grep + stemming + recency + agent reads + agent iterates
      = factual recall solved for the vast majority of cases at near-zero cost
 ```
 
@@ -41,27 +41,37 @@ No LLM calls at write time. No vector embeddings. No background daemon. No API k
 
 ### Retrieval
 
-Two layers, executed at query time:
+Three layers, executed at query time, each a single ripgrep pass:
 
 ```
-Layer 1: ripgrep (exact string match) → ~70% of queries
-Layer 2: WordNet thesaurus expansion → ripgrep again → +~20% (cumulative ~90%)
+Layer 1: single-pass AND  — one rg call, all terms must co-occur (file-level)
+Layer 2: trigram typo fallback — on AND-miss, OR across 3-char sub-patterns
+Layer 3: the agent iterates — re-search with different words (axiom 2)
 ```
 
-Results ranked by term match count, then recency-boosted:
+Term extraction splits camelCase / snake_case / kebab-case identifiers (so
+`optimizeRerenders` is searchable as "optimize") and applies light stemming
+(`deployment`→`deploy`; ripgrep `-F` substring-matching then catches every
+inflection at once). A corpus-frequency filter (cached + persisted to
+`.chrollo/freq.json`) drops words appearing in >30% of files.
+
+Results ranked by **distinct** matched-term count, then recency-boosted:
 
 ```
-recencyMultiplier = 1 + 1.0 / (daysSince + 1)
-finalScore = matchedTermCount × recencyMultiplier(lineDate)
+recencyMultiplier = 1 + exp(-daysSince / 43)   // ~30-day half-life
+finalScore = distinctMatchedTerms × recencyMultiplier(lineDate)
 ```
 
-Each result includes full file path, ±3 lines of context, line numbers, no branding. Capped at 10 — the agent reads, reasons, and iterates if needed.
+Per-file diversity cap (max 3 from any one session), global cap at 20.
 
-### Thesaurus
+### ~~Thesaurus~~ (removed in 0.2.0)
 
-- 606 words, 3,357 synonym pairs, 46KB — ships with the extension
-- Zero runtime dependencies. Loaded once at startup with `JSON.parse`.
-- Integration: exact grep → no results → thesaurus expand → grep again
+Chrollo previously shipped a WordNet thesaurus (606 words, 3,357 pairs) as a
+fallback. It was **removed** because WordNet lists every sense of a word, so
+the fallback injected irrelevant synonyms (`build`→`physique`, `code`→`encipher`,
+`application`→`lotion`) and *required* them to co-occur — narrowing results to
+noise exactly when help was most needed. Light stemming + the agent iterating
+with different words covers the morphological cases without the polysemy cost.
 
 ### Lifecycle
 
@@ -71,7 +81,7 @@ Three Pi hooks:
 - **`agent_end`** — builds chronological sections from assistant messages (text → tool calls → text → ...). Appends turn to memory file. Creates the file on first write (lazy creation).
 - **`session_shutdown`** — clears all state. No data persists between sessions.
 
-One tool: **`read_memory(query)`** — searches past conversations via ripgrep + thesaurus. Returns lines with exact line numbers. The agent reads around matches with `read --offset --limit` rather than reading full files.
+One tool: **`read_memory(query)`** — searches past conversations via single-pass AND + trigram fallback. Returns lines with exact line numbers. The agent reads around matches with `read --offset --limit` rather than reading full files.
 
 ---
 
@@ -138,12 +148,16 @@ what project are we working on
 | Feature | Reason Skipped |
 |---|---|
 | **BM25 + Inverted Index** | Ripgrep is instant at current scale. Even at 100k+ lines, ripgrep keeps up. |
-| **Embedding fallback (all-MiniLM)** | 80MB model for ~1% of queries. Thesaurus + agent iteration covers it. |
+| **Embedding fallback (all-MiniLM)** | 80MB model for ~1% of queries. Stemming + trigram + agent iteration covers it. |
 | **Config system** | No knobs to tune. Hardcoded constants work fine. |
 | **Soft deletion** | Storage is cheap. Don't delete. |
 | **Multi-device sync** | User brings their own (git, rsync, Dropbox). Files are plain markdown. |
 | **MCP Server** | Only needed for non-Pi harnesses (Claude Code, Codex). Not yet. |
 | **LLM Wiki** | Karpathy's pattern works for documents — feed it an article, it writes wiki pages, you query the index. For conversation memory, the agent would have to constantly write wiki pages about what was said. This loses the raw text (phrasing, emotion, nuance) and adds an LLM call on every turn. The answer to "but structured facts" is: keep your keywords clean and the agent will find it. |
+| **Thesaurus (removed in 0.2.0)** | WordNet polysemy made it net-negative (`build`→`physique`, `code`→`encipher`). Stemming covers morphology; the agent iterates for true synonyms. The only revival path is a hand-curated dev/tech synonym map, and only if synonym-recall failures are demonstrated after stemming ships. |
+| **`read_memory` "expand" mode** | The deliberate design is "return compact `path:line \| text` markers; agent reads around them." An expand mode (return ±N lines directly) duplicates the `read` tool's job and muddies the clean abstraction. |
+| **Reconnect double-append fix (held)** | The capture-retry path can append a turn twice on reconnect. Held pending a plain-language walkthrough before implementing (the fix is a debounce; see SPEC §10.1). |
+| **Auto-tag capture (held)** | Regex-extracting the first identifier/proper-noun into a `#tag` line at write time. Could improve recall across paraphrase; held pending understanding the value (see SPEC §10.2). |
 | **Memory toggle / TUI display** | Would break ambient injection. The toggle means someone forgets they turned it off — agent goes blind, Chrollo feels broken. The preamble tells the agent "this is files on disk, only use if relevant" — the exact opposite of what the prompt guidelines are building. Display in the TUI turns ambient recall into a wall of file paths and timestamps every turn. These are not bugs to patch out. The fix for injection noise is better retrieval, not a kill switch. |
 
 ---
@@ -183,6 +197,36 @@ At ~1,000 lines, 3 files had mixed responsibilities — `index.ts` did wiring + 
 ### Comment style
 
 Mixed `/** JSDoc */`, `// ---`, and inline `//` comments. Fix: all comments use `// --- text ---`. Only kept vital ones: module purpose, section headers, and non-obvious edge cases.
+
+### 0.2.0 — the correctness / recall / reliability pass
+
+A full adversarial audit surfaced a cluster of latent bugs; each is recorded as an
+Architectural Decision (AD-n) in `.vscode/SPEC.md`. The non-obvious ones:
+
+- **Timezone bug in recency** (AD-1): timestamps were *written* in local time
+  (`getHours()`) but *read* as UTC (string-concat `…Z`). Users ahead of UTC saw
+  today's memories parsed as "future" → zero recency boost. Fix: read local via
+  the `Date(Y,M-1,D,h,m,s)` constructor. No file-format change.
+- **Stale corpus-frequency cache** (AD-2): the module-level cache survived across
+  sessions in Pi's long-running process. Fix: `invalidateCorpusCache()` at
+  session_start + after each append.
+- **Single-pass AND** (AD-4): the old search spawned N ripgrep processes (one per
+  term) serially. Replaced with one `rg --json` pass + JS file-level AND.
+- **30-day recency half-life** (AD-5): the inverse curve decayed too fast.
+- **Code-aware tokenizer** (AD-6): identifiers were mashed into un-greppable blobs.
+- **Thesaurus removed** (AD-7): WordNet polysemy made it net-negative.
+- **Async I/O** (AD-8): `*Sync` fs calls → `fs/promises` throughout.
+- **Metrics sidecar** (AD-13): `.chrollo/metrics.jsonl` records latency + aborts.
+
+### Known limitation surfaced by metrics (post-0.2.0)
+
+The metrics sidecar exposed that `proximitySearch` (the auto-injection path) on
+a ~285-file corpus takes **~200ms clean** — well over its 50ms budget. In other
+words, auto-injection is **consistently aborting** at this corpus size, silently
+injecting nothing. This was previously invisible; it is now recorded as
+`"aborted":true`. The 50ms budget is a tuning constant (`INJECT_BUDGET_MS`) —
+raising it (e.g. to 250ms) trades a little rendering latency for actual recall.
+Not changed in 0.2.0 (out of approved scope); flagged for the next pass.
 
 ---
 
