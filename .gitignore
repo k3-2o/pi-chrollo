@@ -4,4 +4,3 @@ dist/
 *.log
 .chrollo/
 .vscode/
-AUDIT-FINDINGS.md
