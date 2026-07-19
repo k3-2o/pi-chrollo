@@ -57,12 +57,17 @@ of files. The frequency index is a **synchronous module-level cache**, built
 once at `session_start` (~280ms) and reused for every prompt that session;
 cleared at `session_shutdown` so the next session rebuilds fresh.
 
-Results ranked by **distinct** matched-term count, then recency-boosted:
+Results ranked by **IDF-weighted** matched terms, then recency-boosted
+(access-reinforced):
 
 ```
-recencyMultiplier = 1 + exp(-daysSince / 43)   // ~30-day half-life
-finalScore = distinctMatchedTerms × recencyMultiplier(lineDate)
+recencyMultiplier = 1 + exp(-daysSince / 43)            // ~30-day half-life
+                      max(creationDecay, 0.7 × accessDecay)   // if referenced
+finalScore = Σ(idf(term)) × recencyMultiplier(lineDate, lastAccessed)
 ```
+
+Rare terms (high IDF) outweigh common ones; recently-referenced memories stay
+fresh longer than their creation age would suggest.
 
 Per-file diversity cap (max 3 from any one session), global cap at 20.
 
@@ -234,11 +239,33 @@ Architectural Decision (AD-n) in `.vscode/SPEC.md`. The non-obvious ones:
 
 The metrics sidecar exposed that `proximitySearch` (the auto-injection path) on
 a ~285-file corpus takes **~200ms clean** — well over its 50ms budget. In other
-words, auto-injection is **consistently aborting** at this corpus size, silently
-injecting nothing. This was previously invisible; it is now recorded as
-`"aborted":true`. The 50ms budget is a tuning constant (`INJECT_BUDGET_MS`) —
-raising it (e.g. to 250ms) trades a little rendering latency for actual recall.
-Not changed in 0.2.0 (out of approved scope); flagged for the next pass.
+words, auto-injection was **consistently aborting** at this corpus size, silently
+injecting nothing. **Phase 10A (below) addresses this** by gating — skipping the
+search for prompts where it would return nothing useful.
+
+### Phase 10 — Smart Retrieval (post-0.2.0)
+
+Three optimizations from the frontier-memory research synthesis, all in-paradigm
+(no LLM, no embeddings, no extraction):
+
+- **10A — Proactive injection gating:** `before_agent_start` now skips the
+  proximity search when (1) the prompt is trivial (acknowledgements, greetings,
+  thanks, continuations — checked via `isTrivialPrompt`), or (2) the distinctive
+  terms haven't changed since the last injection (`sameTerms` — the search would
+  return the same results, which dedup would filter anyway). Searches less, not
+  faster. Directly addresses the 50ms-budget aborts.
+- **10B — Access-reinforced decay:** `.chrollo/access.json` tracks when each
+  memory line was last referenced (via `read_memory` or injection). The recency
+  multiplier blends creation-age decay with access-age decay (at 70% strength).
+  A memory you keep coming back to stays accessible longer than one you wrote
+  once and forgot. Synchronous I/O, sidecar (derived, deletable).
+- **10C — IDF-weighted ranking:** `buildIdfWeights` weights each matched term by
+  `log(1 + totalFiles / (1 + freq))`. A match on a rare term (`k3s`) counts more
+  than a match on a common one (`config`). Replaces the flat distinct-term count.
+
+> **What's held:** result-delivery polish (layer 4) and associative memory links
+> (layer 5) are documented in SPEC §10.6–10.7 as revisit-after. Both stay out
+> until the in-scope work is proven stable and a specific gap appears.
 
 ---
 
