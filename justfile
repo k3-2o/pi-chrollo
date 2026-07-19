@@ -23,8 +23,8 @@ smoke:
 types:
     npx tsc --noEmit
 
-# Read-only verification: format-check + smoke
-check: lint smoke
+# Read-only verification: format-check + types + smoke
+check: lint types smoke
 
 # Run the test suite
 test:

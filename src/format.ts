@@ -1,6 +1,7 @@
 // --- Chrollo Format Layer ---
 
 import { Text } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SearchResponse } from "./search.js";
 
 // --- Agent Context Formatting (compact: one line per result) ---
@@ -23,11 +24,7 @@ export function formatResultsForContext(response: SearchResponse): string {
 
 export function renderCall(
   args: { query?: string },
-  theme: {
-    fg: (style: string, text: string) => string;
-    bold: (text: string) => string;
-    dim: (text: string) => string;
-  },
+  theme: Theme,
   _context?: { isError?: boolean },
 ): Text {
   const query = typeof args.query === "string" ? args.query : "";
@@ -46,10 +43,7 @@ export function renderResult(
     isPartial,
     context,
   }: { expanded: boolean; isPartial: boolean; context?: { isError?: boolean } },
-  theme: {
-    fg: (style: string, text: string) => string;
-    dim: (text: string) => string;
-  },
+  theme: Theme,
   _toolConfig: unknown,
 ): Text {
   if (context?.isError) {

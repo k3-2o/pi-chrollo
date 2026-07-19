@@ -27,6 +27,9 @@ export interface SearchResponse {
 
 const MAX_RESULTS = 20;
 const RECENCY_BOOST = 1.0;
+const RECENCY_HALF_LIFE_DAYS = 30;
+// --- lambda so that exp(-HALF_LIFE/lambda) = 0.5  ->  lambda = HALF_LIFE / ln(2) ---
+const RECENCY_LAMBDA = RECENCY_HALF_LIFE_DAYS / Math.LN2;
 const PROXIMITY_WINDOW = 20; // --- default lines for proximity search ---
 
 // --- Stopwords (trimmed — no more "remember", "talked", "thing" etc) ---
@@ -181,29 +184,50 @@ const STOP_WORDS = new Set([
 
 // --- Helpers ---
 
-function tryParseDate(dateStr: string): Date | undefined {
-  const d = new Date(dateStr);
-  return isNaN(d.getTime()) ? undefined : d;
+// --- Tokenize: split code identifiers (camelCase / snake_case / kebab / acronyms),
+//     lowercase, drop fragments length <= 2. Shared by corpus freq + term extraction.
+//     Code identifiers are the most distinctive tokens in a memory tool for coding;
+//     splitting them recovers recall (optimizeRerenders -> optimize + renders). ---
+export function tokenize(text: string): string[] {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2") // getUserProfile -> get UserProfile
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2") // HTTPServer -> HTTP Server
+    .replace(/[_-]+/g, " ") // user_profile, kebab-case -> spaces
+    .replace(/[^\w\s]/g, " ") // strip remaining punctuation
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
 }
 
-function parseFileDate(filename: string): Date | undefined {
-  const match = filename.match(/^(\d{4}-\d{2}-\d{2})_\d{6}_[a-f0-9]+\.md$/);
-  if (match === null) return undefined;
-  return tryParseDate(match[1] + "T12:00:00Z") ?? undefined;
+// --- Parse a memory filename's date as LOCAL time.
+//     storage.ts writes filenames via getMonth()/getDate() (local), so we must read
+//     them as local -- not append "Z" (UTC), which skewed recency for users ahead
+//     of UTC (today's memories parsed as "future" -> no boost). ---
+export function parseFileDate(filename: string): Date | undefined {
+  const m = filename.match(/^(\d{4})-(\d{2})-(\d{2})_\d{6}_[a-f0-9]+\.md$/);
+  if (m === null) return undefined;
+  const dt = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);
+  return isNaN(dt.getTime()) ? undefined : dt;
 }
 
-function parseLineDate(line: string): Date | undefined {
-  const match = line.match(/^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]/);
-  if (match === null) return undefined;
-  return tryParseDate(match[1] + "T" + match[2] + "Z") ?? undefined;
+// --- Parse a [YYYY-MM-DD HH:MM:SS] line timestamp as LOCAL time (same reason). ---
+export function parseLineDate(line: string): Date | undefined {
+  const m = line.match(/^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\]/);
+  if (m === null) return undefined;
+  const dt = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  return isNaN(dt.getTime()) ? undefined : dt;
 }
 
-function recencyMultiplier(lineDate: Date | undefined): number {
+// --- Recency multiplier: 30-day half-life exponential decay.
+//     today=2.0x, week~1.85x, month=1.5x, 3mo~1.13x, year~1.0x.
+//     The old inverse curve (1/(d+1)) decayed too fast (~7-day half-life),
+//     flattening after a week so "last month" signal was lost. ---
+export function recencyMultiplier(lineDate: Date | undefined): number {
   if (lineDate === undefined) return 1.0;
   const now = Date.now();
   const daysSince = (now - lineDate.getTime()) / (1000 * 60 * 60 * 24);
-  if (daysSince < 0) return 1.0;
-  return 1 + RECENCY_BOOST / (daysSince + 1);
+  if (daysSince < 0) return 1.0; // future-dated: no boost, no penalty
+  return 1 + RECENCY_BOOST * Math.exp(-daysSince / RECENCY_LAMBDA);
 }
 
 // --- Thesaurus (lazy-loaded, never used in auto-injection) ---
@@ -256,13 +280,7 @@ export function computeCorpusFrequency(): { freq: Map<string, number>; totalFile
 
   for (const file of files) {
     const content = fs.readFileSync(path.join(dir, file), "utf-8");
-    const words = new Set(
-      content
-        .toLowerCase()
-        .replace(/[^\w\s]/g, " ")
-        .split(/\s+/)
-        .filter((w) => w.length > 2),
-    );
+    const words = new Set(tokenize(content));
     for (const word of words) {
       freq.set(word, (freq.get(word) ?? 0) + 1);
     }
@@ -280,11 +298,7 @@ export function extractDistinctiveTerms(
   corpusFreq: Map<string, number>,
   totalFiles: number,
 ): string[] {
-  const raw = query
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+  const raw = tokenize(query).filter((w) => !STOP_WORDS.has(w));
 
   if (raw.length === 0) return [];
 
@@ -494,7 +508,7 @@ function isToolLine(text: string): boolean {
 
 // --- Rank results by term density + recency ---
 
-function rankResults(results: CompactResult[]): CompactResult[] {
+export function rankResults(results: CompactResult[]): CompactResult[] {
   // Dedup by file:line
   const seen = new Set<string>();
   const unique: CompactResult[] = [];
@@ -505,10 +519,11 @@ function rankResults(results: CompactResult[]): CompactResult[] {
     unique.push(r);
   }
 
-  // Sort: more matched terms first, then recency boost
+  // Sort: more DISTINCT matched terms first, then recency boost.
+  // Dedup so a word appearing 3x on one line doesn't triple the score.
   unique.sort((a, b) => {
-    const aScore = a.matchedTerms.length * recencyMultiplier(a.lineDate);
-    const bScore = b.matchedTerms.length * recencyMultiplier(b.lineDate);
+    const aScore = new Set(a.matchedTerms).size * recencyMultiplier(a.lineDate);
+    const bScore = new Set(b.matchedTerms).size * recencyMultiplier(b.lineDate);
     return bScore - aScore;
   });
 
