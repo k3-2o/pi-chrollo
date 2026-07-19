@@ -28,6 +28,7 @@ import {
   isTrivialPrompt,
   sameTerms,
   decideAmbientSearch,
+  withInjectionBudget,
   type AmbientSearchDecision,
 } from "./src/inject.js";
 import { recordMetric } from "./src/metrics.js";
@@ -188,12 +189,13 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     if (decision.skip) return;
     lastDistinctTerms = decision.lastDistinctTerms;
 
-    // Proximity search with hard 50ms timeout
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 50);
-
+    // Proximity search with hard 50ms timeout. withInjectionBudget clears the
+    // timer as soon as proximitySearch returns, so a slow post-search path cannot
+    // exceed the budget.
     try {
-      const response = await proximitySearch(distinctTerms, 20, controller.signal);
+      const response = await withInjectionBudget(50, (signal) =>
+        proximitySearch(distinctTerms, 20, signal),
+      );
 
       if (response.results.length === 0) return;
 
@@ -229,8 +231,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
         aborted: true,
       });
       return;
-    } finally {
-      clearTimeout(timer);
     }
   });
 

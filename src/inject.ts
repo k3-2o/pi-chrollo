@@ -140,6 +140,23 @@ export function filterInjected<T extends HasKey>(results: T[], injectedKeys: Set
   return results.filter((r) => !injectedKeys.has(dedupKey(r)));
 }
 
+// --- Run an async function with a hard timeout. If the timeout fires before
+//     the function resolves, the AbortSignal is aborted. Throws if the timeout
+//     is exceeded or if the function itself throws. The timer is cleared as soon
+//     as the function resolves so it cannot fire during downstream sync work.
+export async function withInjectionBudget<T>(
+  budgetMs: number,
+  fn: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budgetMs);
+  try {
+    return await fn(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // --- Record the keys of freshly-injected results into the set (mutates set).
 export function recordInjected<T extends HasKey>(results: T[], injectedKeys: Set<string>): void {
   for (const r of results) injectedKeys.add(dedupKey(r));
