@@ -248,7 +248,11 @@ export function trigramRegex(term: string): string | null {
 
 // --- Last-resort trigram OR search across all query terms. Loosens AND to OR
 //     (any term's trigrams match). Results are flagged layer 'trigram'. ---
-async function trigramFallback(terms: string[], signal?: AbortSignal): Promise<SearchResponse> {
+async function trigramFallback(
+  terms: string[],
+  signal?: AbortSignal,
+  idfWeights?: Map<string, number>,
+): Promise<SearchResponse> {
   const dir = getMemoriesDir();
   if (!fs.existsSync(dir)) return { results: [], layer: "trigram", totalMatches: 0 };
 
@@ -298,7 +302,7 @@ async function trigramFallback(terms: string[], signal?: AbortSignal): Promise<S
   }
 
   const clean = results.filter((r) => !isToolLine(r.text));
-  const ranked = rankResults(clean, getAccessMap());
+  const ranked = rankResults(clean, { accessMap: getAccessMap(), idfWeights });
   recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
   return { results: ranked, layer: "trigram", totalMatches: clean.length };
 }
@@ -555,10 +559,45 @@ function isToolLine(text: string): boolean {
 
 // --- Rank results by term density + recency ---
 
-export function rankResults(
-  results: CompactResult[],
-  accessMap?: Map<string, Date>,
-): CompactResult[] {
+export interface RankContext {
+  accessMap?: Map<string, Date>;
+  idfWeights?: Map<string, number>;
+}
+
+// --- Build IDF (inverse document frequency) weights from the corpus freq map.
+//     Rare terms get high weight; common terms get low weight. Used by
+//     rankResults so a match on 'k3s' (rare) outranks a match on 'config'
+//     (common) at equal distinct-term count. ---
+export function buildIdfWeights(
+  terms: string[],
+  freq: Map<string, number>,
+  totalFiles: number,
+): Map<string, number> {
+  const weights = new Map<string, number>();
+  for (const term of terms) {
+    const f = freq.get(term) ?? 0;
+    const idf = Math.log(1 + totalFiles / (1 + f));
+    weights.set(term, idf);
+    const s = stem(term);
+    if (s !== term) weights.set(s, idf); // stem shares the term's weight
+  }
+  return weights;
+}
+
+// --- Score a single result: IDF-weighted distinct terms × recency. ---
+function scoreResult(r: CompactResult, ctx: RankContext | undefined, key: string): number {
+  const distinct = new Set(r.matchedTerms);
+  let termScore: number;
+  if (ctx?.idfWeights !== undefined && ctx.idfWeights.size > 0) {
+    termScore = 0;
+    for (const t of distinct) termScore += ctx.idfWeights.get(t) ?? 1;
+  } else {
+    termScore = distinct.size;
+  }
+  return termScore * recencyMultiplier(r.lineDate, ctx?.accessMap?.get(key));
+}
+
+export function rankResults(results: CompactResult[], ctx?: RankContext): CompactResult[] {
   // Dedup by file:line
   const seen = new Set<string>();
   const unique: CompactResult[] = [];
@@ -569,16 +608,15 @@ export function rankResults(
     unique.push(r);
   }
 
-  // Sort: more DISTINCT matched terms first, then recency boost (reinforced by
-  // access history if available). Dedup so a word appearing 3x on one line
-  // doesn't triple the score.
+  // Sort: IDF-weighted distinct-term score × recency boost. If IDF weights
+  // are provided, each distinct matched term is weighted by its rarity (a
+  // 'k3s' match outweighs a 'config' match). Otherwise falls back to a simple
+  // distinct-term count. Access history reinforces recency (Phase 10B).
   unique.sort((a, b) => {
     const aKey = `${a.sourcePath}:${a.line}`;
     const bKey = `${b.sourcePath}:${b.line}`;
-    const aScore =
-      new Set(a.matchedTerms).size * recencyMultiplier(a.lineDate, accessMap?.get(aKey));
-    const bScore =
-      new Set(b.matchedTerms).size * recencyMultiplier(b.lineDate, accessMap?.get(bKey));
+    const aScore = scoreResult(a, ctx, aKey);
+    const bScore = scoreResult(b, ctx, bKey);
     return bScore - aScore;
   });
 
@@ -619,8 +657,9 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
 
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
-  const { freq, totalFiles } = await computeCorpusFrequency();
+  const { freq, totalFiles } = computeCorpusFrequency();
   const terms = extractDistinctiveTerms(query, freq, totalFiles);
+  const idfWeights = buildIdfWeights(terms, freq, totalFiles);
 
   if (terms.length === 0) {
     return track({ results: [], layer: "and", totalMatches: 0 });
@@ -631,7 +670,7 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   if (andFiles.length > 0) {
-    const ranked = rankResults(andLines, getAccessMap());
+    const ranked = rankResults(andLines, { accessMap: getAccessMap(), idfWeights });
     recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
     return track({ results: ranked, layer: "and", totalMatches: andLines.length });
   }
@@ -639,7 +678,7 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
   // AND-miss: last-resort trigram typo fallback (AD-12). Loosens to OR across
   // 3-char sub-patterns so typos / partial spellings still surface something.
   if (signal?.aborted) throw new Error("read_memory: aborted");
-  return track(await trigramFallback(terms, signal));
+  return track(await trigramFallback(terms, signal, idfWeights));
 }
 
 /**
@@ -765,7 +804,9 @@ export async function proximitySearch(
   }
 
   const cleanResults = proximityResults.filter((r) => !isToolLine(r.text));
-  const ranked = rankResults(cleanResults, getAccessMap());
+  const { freq: proxFreq, totalFiles: proxTotal } = computeCorpusFrequency();
+  const proxIdf = buildIdfWeights(terms, proxFreq, proxTotal);
+  const ranked = rankResults(cleanResults, { accessMap: getAccessMap(), idfWeights: proxIdf });
   recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
   return track({
     results: ranked,

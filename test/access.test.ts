@@ -133,7 +133,7 @@ describe("rankResults with access map (10B integration)", () => {
       ["/read.md:1", new Date(Date.now() - 1 * DAY_MS)], // read yesterday
     ]);
 
-    const out = rankResults([unread, read], access);
+    const out = rankResults([unread, read], { accessMap: access });
     expect(out[0]).toBe(read); // read one ranks higher despite same age
   });
 
