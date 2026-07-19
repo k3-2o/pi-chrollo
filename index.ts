@@ -29,6 +29,7 @@ import {
   sameTerms,
 } from "./src/inject.js";
 import { recordMetric } from "./src/metrics.js";
+import { invalidateAccessCache } from "./src/access.js";
 
 // --- Types ---
 
@@ -248,6 +249,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     injectedKeys = new Set();
     lastDistinctTerms = new Set();
     invalidateCorpusCache();
+    invalidateAccessCache();
   });
 
   // --- Tool: read_memory ---

@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getMemoriesDir } from "./storage.js";
 import { recordMetric } from "./metrics.js";
+import { getAccessMap, recordAccess } from "./access.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -297,7 +298,9 @@ async function trigramFallback(terms: string[], signal?: AbortSignal): Promise<S
   }
 
   const clean = results.filter((r) => !isToolLine(r.text));
-  return { results: rankResults(clean), layer: "trigram", totalMatches: clean.length };
+  const ranked = rankResults(clean, getAccessMap());
+  recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
+  return { results: ranked, layer: "trigram", totalMatches: clean.length };
 }
 
 // --- Parse a memory filename's date as LOCAL time.
@@ -323,12 +326,27 @@ export function parseLineDate(line: string): Date | undefined {
 //     today=2.0x, week~1.85x, month=1.5x, 3mo~1.13x, year~1.0x.
 //     The old inverse curve (1/(d+1)) decayed too fast (~7-day half-life),
 //     flattening after a week so "last month" signal was lost. ---
-export function recencyMultiplier(lineDate: Date | undefined): number {
+export function recencyMultiplier(lineDate: Date | undefined, lastAccessed?: Date): number {
   if (lineDate === undefined) return 1.0;
   const now = Date.now();
   const daysSince = (now - lineDate.getTime()) / (1000 * 60 * 60 * 24);
   if (daysSince < 0) return 1.0; // future-dated: no boost, no penalty
-  return 1 + RECENCY_BOOST * Math.exp(-daysSince / RECENCY_LAMBDA);
+
+  let decay = Math.exp(-daysSince / RECENCY_LAMBDA);
+
+  // Access reinforcement (Phase 10B): if the memory was referenced (read/
+  // injected) more recently than it was created, blend in that freshness at
+  // 70% strength. A memory you keep coming back to stays accessible longer
+  // than one you wrote once and forgot.
+  if (lastAccessed !== undefined) {
+    const daysSinceAccess = (now - lastAccessed.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceAccess >= 0) {
+      const accessDecay = Math.exp(-daysSinceAccess / RECENCY_LAMBDA) * 0.7;
+      decay = Math.max(decay, accessDecay);
+    }
+  }
+
+  return 1 + RECENCY_BOOST * decay;
 }
 
 // --- Corpus word frequency (for filtering common words) ---
@@ -537,7 +555,10 @@ function isToolLine(text: string): boolean {
 
 // --- Rank results by term density + recency ---
 
-export function rankResults(results: CompactResult[]): CompactResult[] {
+export function rankResults(
+  results: CompactResult[],
+  accessMap?: Map<string, Date>,
+): CompactResult[] {
   // Dedup by file:line
   const seen = new Set<string>();
   const unique: CompactResult[] = [];
@@ -548,11 +569,16 @@ export function rankResults(results: CompactResult[]): CompactResult[] {
     unique.push(r);
   }
 
-  // Sort: more DISTINCT matched terms first, then recency boost.
-  // Dedup so a word appearing 3x on one line doesn't triple the score.
+  // Sort: more DISTINCT matched terms first, then recency boost (reinforced by
+  // access history if available). Dedup so a word appearing 3x on one line
+  // doesn't triple the score.
   unique.sort((a, b) => {
-    const aScore = new Set(a.matchedTerms).size * recencyMultiplier(a.lineDate);
-    const bScore = new Set(b.matchedTerms).size * recencyMultiplier(b.lineDate);
+    const aKey = `${a.sourcePath}:${a.line}`;
+    const bKey = `${b.sourcePath}:${b.line}`;
+    const aScore =
+      new Set(a.matchedTerms).size * recencyMultiplier(a.lineDate, accessMap?.get(aKey));
+    const bScore =
+      new Set(b.matchedTerms).size * recencyMultiplier(b.lineDate, accessMap?.get(bKey));
     return bScore - aScore;
   });
 
@@ -605,7 +631,8 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
   if (andFiles.length > 0) {
-    const ranked = rankResults(andLines);
+    const ranked = rankResults(andLines, getAccessMap());
+    recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
     return track({ results: ranked, layer: "and", totalMatches: andLines.length });
   }
 
@@ -738,7 +765,8 @@ export async function proximitySearch(
   }
 
   const cleanResults = proximityResults.filter((r) => !isToolLine(r.text));
-  const ranked = rankResults(cleanResults);
+  const ranked = rankResults(cleanResults, getAccessMap());
+  recordAccess(ranked.map((r) => `${r.sourcePath}:${r.line}`));
   return track({
     results: ranked,
     layer: "proximity",
