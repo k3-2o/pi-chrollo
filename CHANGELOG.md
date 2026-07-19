@@ -105,6 +105,15 @@ in-paradigm: no LLM calls, no embeddings, no extraction. 140 tests green.
 - **`rankResults`** now takes a `RankContext { accessMap?, idfWeights? }`. Falls
   back to flat distinct-term counting when no IDF weights are provided.
 
+### Adversarial audit fixes
+- **F-02** — `decideAmbientSearch` now compares the *previous* prompt's
+  distinctive terms against the current prompt's terms. Previously the previous
+  set was overwritten before the comparison, making every same-topic follow-up
+  skip the search and miss fresh context.
+- **F-01** — `withInjectionBudget` now checks the `AbortSignal` after the
+  wrapped function resolves, so the 50ms auto-injection budget is enforced for
+  the formatting/injection path as well as the search itself.
+
 ---
 
 ## [0.1.12] — 2026-06
