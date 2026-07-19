@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   dedupKey,
   topicChanged,
@@ -7,6 +7,7 @@ import {
   isTrivialPrompt,
   sameTerms,
   decideAmbientSearch,
+  withInjectionBudget,
 } from "../src/inject";
 import type { CompactResult } from "../src/search";
 
@@ -196,5 +197,43 @@ describe("decideAmbientSearch (F-02 integration)", () => {
     );
     expect(second.skip).toBe(false); // new topic, not skipped
     expect(second.injectedKeys.size).toBe(0); // reset
+  });
+});
+
+describe.sequential("withInjectionBudget (F-01 integration)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns the function result when it resolves within budget", async () => {
+    const fn = vi.fn().mockResolvedValue("ok");
+    const promise = withInjectionBudget(50, fn);
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(promise).resolves.toBe("ok");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("throws when the budget fires before the function resolves", async () => {
+    const fn = vi.fn().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return "late";
+    });
+    const promise = withInjectionBudget(50, fn);
+    vi.advanceTimersByTime(100);
+    await expect(promise).rejects.toThrow("read_memory: aborted");
+  });
+
+  it("throws when the function resolves just after the budget fires", async () => {
+    const fn = vi.fn().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return "late";
+    });
+    const promise = withInjectionBudget(50, fn);
+    vi.advanceTimersByTime(60);
+    await expect(promise).rejects.toThrow("read_memory: aborted");
   });
 });

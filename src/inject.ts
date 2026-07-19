@@ -151,7 +151,9 @@ export async function withInjectionBudget<T>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budgetMs);
   try {
-    return await fn(controller.signal);
+    const result = await fn(controller.signal);
+    if (controller.signal.aborted) throw new Error("read_memory: aborted");
+    return result;
   } finally {
     clearTimeout(timer);
   }
