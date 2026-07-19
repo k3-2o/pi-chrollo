@@ -15,7 +15,6 @@ import {
   grepSearch,
   proximitySearch,
   computeCorpusFrequency,
-  peekCorpusCache,
   extractDistinctiveTerms,
   invalidateCorpusCache,
 } from "./src/search.js";
@@ -41,6 +40,12 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   let pendingSession: PendingSession | undefined;
   let lastUserPrompt: string | undefined;
 
+  // --- Cache corpus frequency for term extraction across the session.
+  //     Pre-warmed SYNCHRONOUSLY at session_start so before_agent_start always
+  //     finds it warm (no async race, no prompt-box freeze). Computed once per
+  //     session (~280ms at startup, NOT per-prompt). ---
+  let corpusFreqCache: { freq: Map<string, number>; totalFiles: number } | undefined;
+
   // --- Injection dedup (AD-10): remember which file:line keys we already
   //     surfaced, so follow-up turns don't re-inject the same lines. Cleared
   //     when the prompt's distinctive terms change substantially (topic shift).
@@ -52,10 +57,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     setActiveMemoriesDir(ctx.cwd);
-    await initMemoryDir();
+    initMemoryDir();
 
     const sessionId = ctx.sessionManager.getSessionId();
-    const existingFile = await findSessionFile(sessionId);
+    const existingFile = findSessionFile(sessionId);
 
     sessionMeta = {
       sessionId,
@@ -72,27 +77,22 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       pendingSession = { ...sessionMeta };
     }
 
-    // Fresh corpus cache each session (AD-2): invalidate any stale module cache
-    // from a prior session in this process, then pre-warm (async + persisted).
-    invalidateCorpusCache();
-    void computeCorpusFrequency(); // fire-and-forget warm-up; awaits on first use
+    // Pre-warm corpus frequency cache SYNCHRONOUSLY so every prompt this
+    // session finds it warm. (~280ms once at startup — not per-prompt.)
+    corpusFreqCache = computeCorpusFrequency();
 
-    // Notify asynchronously — don't block startup on a full corpus read.
-    // getMemoryStats() reads all session files; deferring it keeps the extension
-    // list from hanging. The notify appears a moment later, which is fine.
-    void getMemoryStats().then((stats) => {
-      if (ctx.hasUI) {
-        ctx.ui.notify(
-          `Chrollo: ${stats.totalLines} memories across ${stats.sessionCount} sessions`,
-          "info",
-        );
-      }
-    });
+    const stats = getMemoryStats();
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        `Chrollo: ${stats.totalLines} memories across ${stats.sessionCount} sessions`,
+        "info",
+      );
+    }
   });
 
   // --- Ensure memory file exists ---
 
-  async function ensureMemoryFile(): Promise<string | undefined> {
+  function ensureMemoryFile(): string | undefined {
     if (currentMemoryFile !== undefined) {
       if (fs.existsSync(currentMemoryFile)) return currentMemoryFile;
       currentMemoryFile = undefined;
@@ -112,7 +112,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       parentSession: pendingSession.parentSession,
     };
 
-    currentMemoryFile = await createSessionFile(frontmatter);
+    currentMemoryFile = createSessionFile(frontmatter);
     pendingSession = undefined;
     return currentMemoryFile;
   }
@@ -148,16 +148,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
     const fullAgentText = sections.join("\n\n");
 
-    const filePath = await ensureMemoryFile();
+    const filePath = ensureMemoryFile();
     if (filePath === undefined) return;
 
-    await appendTurn(filePath, lastUserPrompt, fullAgentText, new Date());
-    // NOTE: we do NOT invalidate the corpus cache here. The cache is rebuilt at
-    // session_start (fixing the cross-session staleness bug AD-2), and within a
-    // session a newly-written word being absent from the freq map for one prompt
-    // is harmless (it just scores as "distinctive" — which is correct). Inlining
-    // an invalidate here was forcing a 58ms cache reload on EVERY prompt after
-    // turn 1, causing the prompt-input lag. See docs/ARC.md.
+    appendTurn(filePath, lastUserPrompt, fullAgentText, new Date());
     lastUserPrompt = undefined;
   });
 
@@ -169,13 +163,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     // Skip short prompts
     if (event.prompt.length < 10) return;
 
-    // BEST-EFFORT auto-injection: peek at the cache SYNCHRONOUSLY. Never block
-    // the prompt box on a corpus read. If the cache isn't warm yet (first prompt
-    // of a session, or a rebuild still in flight), skip injection for this one
-    // prompt — the agent doesn't die, it just gets no ambient memory for a turn.
-    // The cache is pre-warmed at session_start (fire-and-forget).
-    const cache = peekCorpusCache();
-    if (cache === null) return;
+    // Read the corpus cache SYNCHRONOUSLY. It was pre-warmed at session_start,
+    // so this is always instant — no async, no mid-handler yield, no prompt-box
+    // freeze. (The async await here is what broke 0.2.0.)
+    const cache = corpusFreqCache ?? computeCorpusFrequency();
     const distinctTerms = extractDistinctiveTerms(event.prompt, cache.freq, cache.totalFiles);
 
     if (distinctTerms.length < 2) return; // too vague for proximity
@@ -239,9 +230,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     currentMemoryFile = undefined;
     lastUserPrompt = undefined;
     sessionMeta = undefined;
-    invalidateCorpusCache();
+    corpusFreqCache = undefined;
     injectedKeys = new Set();
     lastDistinctTerms = new Set();
+    invalidateCorpusCache();
   });
 
   // --- Tool: read_memory ---

@@ -1,7 +1,6 @@
 // --- Chrollo Search Layer ---
 
 import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -333,84 +332,22 @@ export function recencyMultiplier(lineDate: Date | undefined): number {
 }
 
 // --- Corpus word frequency (for filtering common words) ---
-// Persisted to .chrollo/freq.json (the parent of the memories dir, NOT inside
-// memories/ — otherwise it'd be scanned as a memory file). Fingerprinted by
-// (fileCount, totalBytes) so it's reused only when the corpus is unchanged;
-// rebuilt lazily on first search after any change. Invalidated explicitly on
-// session_start only (the cross-session staleness fix AD-2). NOT invalidated
-// after each append within a session — see invalidateCorpusCache() docstring.
+// Synchronous, computed once per session (pre-warmed at session_start into a
+// closure var in index.ts, reused for every prompt). Module-level cache cleared
+// at session_shutdown. This is deliberately SYNCHRONOUS: the handlers must run
+// atomically (no mid-handler yields) so the cache is always warm when the
+// prompt path reads it. The once-per-session ~280ms read at startup is
+// acceptable; it is NOT per-prompt. (The async conversion of this function in
+// 0.2.0 broke atomicity and froze the prompt box — reverted.)
 
 let _corpusFreqCache: Map<string, number> | null = null;
 let _corpusTotalFiles = 0;
-// Memoize the IN-FLIGHT computation so concurrent callers (e.g. session_start
-// pre-warm racing the first before_agent_start) share one read pass instead of
-// double-reading the corpus.
-let _corpusFreqPromise: Promise<{ freq: Map<string, number>; totalFiles: number }> | null = null;
 
-// --- Invalidate the in-memory cache. Called at session_start so a fresh build
-//     runs (fixes the cross-session staleness bug AD-2 — the module cache used
-//     to survive the whole process lifetime). NOT called after each append:
-//     within a session, a freshly-written word being absent from the freq map
-//     for one prompt is harmless (it scores as "distinctive", which is correct),
-//     and invalidating here would force a 58ms cache reload on every prompt
-//     (the prompt-input lag regression). ---
-export function invalidateCorpusCache(): void {
-  _corpusFreqCache = null;
-  _corpusTotalFiles = 0;
-  _corpusFreqPromise = null;
-}
-
-function corpusCachePath(): string {
-  // parent of the memories dir = the .chrollo/ (or global) root
-  return path.join(path.dirname(getMemoriesDir()), "freq.json");
-}
-
-interface PersistedFreq {
-  fileCount: number;
-  totalBytes: number;
-  freq: Array<[string, number]>;
-}
-
-// --- Compute (or reuse) the corpus frequency map. Async + persisted.
-//     Reads files in parallel via fs/promises; falls back to empty if the
-//     memories dir is absent. Public so index.ts can pre-warm at session_start. ---
-// --- Peek at the warm cache SYNCHRONOUSLY, or return null if not ready.
-//     Used by before_agent_start so the prompt path never blocks on a corpus
-//     read. Auto-injection is best-effort: if the cache isn't warm yet (first
-//     prompt of a session, or a rebuild still in flight), skip injection for
-//     that one prompt rather than freezing the prompt box for up to 1.9s. ---
-export function peekCorpusCache(): { freq: Map<string, number>; totalFiles: number } | null {
-  if (_corpusFreqCache === null) return null;
-  return { freq: _corpusFreqCache, totalFiles: _corpusTotalFiles };
-}
-
-export async function computeCorpusFrequency(): Promise<{
-  freq: Map<string, number>;
-  totalFiles: number;
-}> {
+export function computeCorpusFrequency(): { freq: Map<string, number>; totalFiles: number } {
   if (_corpusFreqCache !== null) {
     return { freq: _corpusFreqCache, totalFiles: _corpusTotalFiles };
   }
-  // Dedupe concurrent cold-builds: share the in-flight promise.
-  if (_corpusFreqPromise !== null) {
-    return _corpusFreqPromise;
-  }
-  _corpusFreqPromise = (async () => {
-    const result = await buildCorpusFrequency();
-    _corpusFreqCache = result.freq;
-    _corpusTotalFiles = result.totalFiles;
-    _corpusFreqPromise = null; // done; future calls hit the cache
-    return result;
-  })();
-  return _corpusFreqPromise;
-}
 
-// --- The actual corpus read (persisted + parallel). Split out so the public
-//     function can memoize the in-flight promise around it. ---
-async function buildCorpusFrequency(): Promise<{
-  freq: Map<string, number>;
-  totalFiles: number;
-}> {
   const dir = getMemoriesDir();
   if (!fs.existsSync(dir)) {
     _corpusFreqCache = new Map();
@@ -418,77 +355,27 @@ async function buildCorpusFrequency(): Promise<{
     return { freq: _corpusFreqCache, totalFiles: 0 };
   }
 
-  const files = (await fsp.readdir(dir)).filter((f) => f.endsWith(".md"));
-
-  // Fingerprint: count + total bytes. If the persisted cache matches, reuse it.
-  let totalBytes = 0;
-  const statTasks = files.map(async (f) => {
-    const st = await fsp.stat(path.join(dir, f));
-    totalBytes += st.size;
-    return st.size;
-  });
-  await Promise.all(statTasks);
-
-  const reused = tryLoadPersisted(corpusCachePath(), files.length, totalBytes);
-  if (reused !== null) {
-    _corpusFreqCache = reused.freq;
-    _corpusTotalFiles = files.length;
-    return { freq: reused.freq, totalFiles: files.length };
-  }
-
-  // Cold: read + tokenize all files in parallel, then aggregate.
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
   const freq = new Map<string, number>();
-  const contents = await Promise.all(files.map((f) => fsp.readFile(path.join(dir, f), "utf-8")));
-  for (const content of contents) {
-    for (const word of new Set(tokenize(content))) {
+
+  for (const file of files) {
+    const content = fs.readFileSync(path.join(dir, file), "utf-8");
+    const words = new Set(tokenize(content));
+    for (const word of words) {
       freq.set(word, (freq.get(word) ?? 0) + 1);
     }
   }
 
-  trySavePersisted(corpusCachePath(), files.length, totalBytes, freq);
+  _corpusFreqCache = freq;
+  _corpusTotalFiles = files.length;
   return { freq, totalFiles: files.length };
 }
 
-// --- Persisted-cache helpers (best-effort; any failure just means a rebuild). ---
-
-function tryLoadPersisted(
-  cachePath: string,
-  fileCount: number,
-  totalBytes: number,
-): { freq: Map<string, number> } | null {
-  try {
-    const raw = fs.readFileSync(cachePath, "utf-8");
-    const parsed = JSON.parse(raw) as PersistedFreq;
-    if (
-      parsed.fileCount === fileCount &&
-      parsed.totalBytes === totalBytes &&
-      Array.isArray(parsed.freq)
-    ) {
-      return { freq: new Map(parsed.freq) };
-    }
-  } catch {
-    // missing or corrupt -> rebuild
-  }
-  return null;
-}
-
-function trySavePersisted(
-  cachePath: string,
-  fileCount: number,
-  totalBytes: number,
-  freq: Map<string, number>,
-): void {
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const payload: PersistedFreq = {
-      fileCount,
-      totalBytes,
-      freq: [...freq.entries()],
-    };
-    fs.writeFileSync(cachePath, JSON.stringify(payload), "utf-8");
-  } catch {
-    // best-effort; ignore write failures
-  }
+// --- Drop the in-memory cache. Called at session_shutdown so the next session
+//     rebuilds (picks up files written by other sessions / imports). ---
+export function invalidateCorpusCache(): void {
+  _corpusFreqCache = null;
+  _corpusTotalFiles = 0;
 }
 
 // --- Smart term extraction: 5 max, filtered by corpus frequency ---
