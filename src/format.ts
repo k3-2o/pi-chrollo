@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SearchResponse } from "./search.js";
 
-// --- Agent Context Formatting (compact: one line per result) ---
+// Agent context formatting: one line per result (sourcePath:line | text)
 
 export function formatResultsForContext(response: SearchResponse): string {
   if (response.results.length === 0) {

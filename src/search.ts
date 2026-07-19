@@ -13,10 +13,10 @@ const execFileAsync = promisify(execFile);
 export interface CompactResult {
   text: string;
   source: string;
-  sourcePath: string; // --- full path for agent ---
+  sourcePath: string; // full path for agent (read <path> --offset <N>)
   line: number;
   matchedTerms: string[];
-  lineDate?: Date; // --- per-line timestamp ---
+  lineDate?: Date; // per-line timestamp, parsed from [YYYY-MM-DD HH:MM:SS]
 }
 
 export interface SearchResponse {
@@ -26,14 +26,14 @@ export interface SearchResponse {
 }
 
 const MAX_RESULTS = 20;
-const PER_FILE_CAP = 3; // --- diversity: max results from any one session file (AD-9) ---
+const PER_FILE_CAP = 3; // PER_FILE_CAP: max 3 per session for diversity (AD-9)
 const RECENCY_BOOST = 1.0;
 const RECENCY_HALF_LIFE_DAYS = 30;
-// --- lambda so that exp(-HALF_LIFE/lambda) = 0.5  ->  lambda = HALF_LIFE / ln(2) ---
+// lambda = HALF_LIFE / ln(2) so exp(-days/lambda) = 0.5 at half-life
 const RECENCY_LAMBDA = RECENCY_HALF_LIFE_DAYS / Math.LN2;
-const PROXIMITY_WINDOW = 20; // --- default lines for proximity search ---
+const PROXIMITY_WINDOW = 20; // default window lines for proximity search
 
-// --- Stopwords (trimmed — no more "remember", "talked", "thing" etc) ---
+// Stopwords — trimmed (no "remember", "talked", "thing" etc)
 
 const STOP_WORDS = new Set([
   "the",
@@ -183,12 +183,11 @@ const STOP_WORDS = new Set([
   "see",
 ]);
 
-// --- Helpers ---
+// --- Tokenize ---
 
-// --- Tokenize: split code identifiers (camelCase / snake_case / kebab / acronyms),
-//     lowercase, drop fragments length <= 2. Shared by corpus freq + term extraction.
-//     Code identifiers are the most distinctive tokens in a memory tool for coding;
-//     splitting them recovers recall (optimizeRerenders -> optimize + renders). ---
+// Tokenize: split code identifiers (camelCase / snake_case / kebab / acronyms),
+// lowercase, drop fragments <= 2 chars. Splitting identifiers recovers recall
+// (optimizeRerenders -> optimize + renders).
 export function tokenize(text: string): string[] {
   return text
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2") // getUserProfile -> get UserProfile
@@ -200,15 +199,15 @@ export function tokenize(text: string): string[] {
     .filter((w) => w.length > 2);
 }
 
-// --- Light stemming (AD-11): strip ONE common suffix from words longer than 4
-//     chars, keeping the root if it's >= 3 chars. Because ripgrep -F matches
-//     SUBSTRINGS, grepping the stem catches all inflections at once:
-//     stem("deployment")="deploy" matches deploy/deploys/deploying/deployed/deployment.
-//     This partially offsets the recall lost when the thesaurus was removed (AD-7).
-//     Over-stem guard: skip if root would be < 3 chars ("using"->"us" is rejected).
-//     Trade-off: "er" occasionally over-matches (docker->dock), mitigated by the
-//     corpus-frequency rarity filter downstream.
-const STEM_SUFFIXES = ["ment", "ion", "ing", "ed", "er", "es", "s"]; // longest first
+// --- Light stemming (AD-11) ---
+
+// Light stemming: strip ONE common suffix from words > 4 chars, keep root >= 3.
+// ripgrep -F matches substrings, so grepping the stem catches all inflections
+// (deployment -> deploy matches deploy/deploys/deploying/deployed).
+// Partially offsets the recall lost when thesaurus was removed (AD-7).
+// Trade-off: "er" occasionally over-matches (docker -> dock), mitigated by
+// corpus-frequency rarity filter.
+const STEM_SUFFIXES = ["ment", "ion", "ing", "ed", "er", "es", "s"];
 export function stem(word: string): string {
   if (word.length <= 4) return word; // too short to stem safely
   for (const suf of STEM_SUFFIXES) {
@@ -221,19 +220,15 @@ export function stem(word: string): string {
   return word;
 }
 
-// --- Expand a term into [term, stem] when stemming changes it. Each entry is a
-//     grep pattern (OR within the group); the AND search requires every GROUP
-//     to match, not every literal. ---
+// Expand term into [term, stem] when stemming changes it (AND uses group-level OR).
 export function groupWithStem(term: string): string[] {
   const s = stem(term);
   return s !== term ? [term, s] : [term];
 }
 
-// --- Trigram typo fallback (AD-12): as a last resort, split a term into 3-char
-//     trigrams and OR them as a regex. Catches typos (recieve<->receive share
-//     'rec' and 'ive') and partial spellings without embeddings. Only fires on
-//     AND-miss, only for terms length>=4. Returns null if the term is too short
-//     to produce >=2 trigrams. ---
+// Trigram typo fallback (AD-12): as last resort, split term into 3-char trigrams
+// and OR them as regex. Catches typos (recieve<->receive share 'rec' and 'ive')
+// and partial spellings without embeddings. Fires on AND-miss, terms >= 4 chars.
 export function trigramRegex(term: string): string | null {
   if (term.length < 4) return null;
   const trigrams: string[] = [];
@@ -246,8 +241,8 @@ export function trigramRegex(term: string): string | null {
   return `(${uniq.join("|")})`;
 }
 
-// --- Last-resort trigram OR search across all query terms. Loosens AND to OR
-//     (any term's trigrams match). Results are flagged layer 'trigram'. ---
+// Last-resort trigram OR across all query terms (OR of all trigram regexes).
+// Results flagged layer 'trigram'.
 async function trigramFallback(
   terms: string[],
   signal?: AbortSignal,
@@ -256,7 +251,7 @@ async function trigramFallback(
   const dir = getMemoriesDir();
   if (!fs.existsSync(dir)) return { results: [], layer: "trigram", totalMatches: 0 };
 
-  // Build one combined alternation from every term's trigrams (OR across all).
+  // Build combined alternation from every term's trigrams (OR across all).
   const allPatterns: string[] = [];
   for (const t of terms) {
     const r = trigramRegex(t);
@@ -307,10 +302,8 @@ async function trigramFallback(
   return { results: ranked, layer: "trigram", totalMatches: clean.length };
 }
 
-// --- Parse a memory filename's date as LOCAL time.
-//     storage.ts writes filenames via getMonth()/getDate() (local), so we must read
-//     them as local -- not append "Z" (UTC), which skewed recency for users ahead
-//     of UTC (today's memories parsed as "future" -> no boost). ---
+// Parse memory filename's date as LOCAL — not UTC (storage.ts uses local date,
+// so "Z" would skew recency for users ahead of UTC).
 export function parseFileDate(filename: string): Date | undefined {
   const m = filename.match(/^(\d{4})-(\d{2})-(\d{2})_\d{6}_[a-f0-9]+\.md$/);
   if (m === null) return undefined;
@@ -318,7 +311,7 @@ export function parseFileDate(filename: string): Date | undefined {
   return isNaN(dt.getTime()) ? undefined : dt;
 }
 
-// --- Parse a [YYYY-MM-DD HH:MM:SS] line timestamp as LOCAL time (same reason). ---
+// Parse [YYYY-MM-DD HH:MM:SS] line timestamp as LOCAL (same reason as parseFileDate).
 export function parseLineDate(line: string): Date | undefined {
   const m = line.match(/^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\]/);
   if (m === null) return undefined;
@@ -326,10 +319,8 @@ export function parseLineDate(line: string): Date | undefined {
   return isNaN(dt.getTime()) ? undefined : dt;
 }
 
-// --- Recency multiplier: 30-day half-life exponential decay.
-//     today=2.0x, week~1.85x, month=1.5x, 3mo~1.13x, year~1.0x.
-//     The old inverse curve (1/(d+1)) decayed too fast (~7-day half-life),
-//     flattening after a week so "last month" signal was lost. ---
+// Recency multiplier: 30-day half-life exponential decay. today=2.0x,
+// week~1.85x, 3mo~1.13x, year~1.0x.
 export function recencyMultiplier(lineDate: Date | undefined, lastAccessed?: Date): number {
   if (lineDate === undefined) return 1.0;
   const now = Date.now();
@@ -338,10 +329,9 @@ export function recencyMultiplier(lineDate: Date | undefined, lastAccessed?: Dat
 
   let decay = Math.exp(-daysSince / RECENCY_LAMBDA);
 
-  // Access reinforcement (Phase 10B): if the memory was referenced (read/
-  // injected) more recently than it was created, blend in that freshness at
-  // 70% strength. A memory you keep coming back to stays accessible longer
-  // than one you wrote once and forgot.
+  // Access reinforcement (Phase 10B): blend in access freshness at 70% strength.
+  // A memory you keep coming back to stays accessible longer than one you
+  // wrote once and forgot.
   if (lastAccessed !== undefined) {
     const daysSinceAccess = (now - lastAccessed.getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceAccess >= 0) {
@@ -557,17 +547,14 @@ function isToolLine(text: string): boolean {
   );
 }
 
-// --- Rank results by term density + recency ---
-
 export interface RankContext {
   accessMap?: Map<string, Date>;
   idfWeights?: Map<string, number>;
 }
 
-// --- Build IDF (inverse document frequency) weights from the corpus freq map.
-//     Rare terms get high weight; common terms get low weight. Used by
-//     rankResults so a match on 'k3s' (rare) outranks a match on 'config'
-//     (common) at equal distinct-term count. ---
+// IDF weights: rare terms get high weight, common terms get low. Used by
+// rankResults so a match on 'k3s' (rare) outranks 'config' (common) at equal
+// distinct-term count.
 export function buildIdfWeights(
   terms: string[],
   freq: Map<string, number>,
@@ -584,7 +571,7 @@ export function buildIdfWeights(
   return weights;
 }
 
-// --- Score a single result: IDF-weighted distinct terms × recency. ---
+// Score result: IDF-weighted distinct terms × recency.
 function scoreResult(r: CompactResult, ctx: RankContext | undefined, key: string): number {
   const distinct = new Set(r.matchedTerms);
   let termScore: number;
@@ -608,10 +595,7 @@ export function rankResults(results: CompactResult[], ctx?: RankContext): Compac
     unique.push(r);
   }
 
-  // Sort: IDF-weighted distinct-term score × recency boost. If IDF weights
-  // are provided, each distinct matched term is weighted by its rarity (a
-  // 'k3s' match outweighs a 'config' match). Otherwise falls back to a simple
-  // distinct-term count. Access history reinforces recency (Phase 10B).
+  // Sort: IDF-weighted term score × recency (IDF weights optional — falls back to distinct-term count). Access history reinforces recency (Phase 10B).
   unique.sort((a, b) => {
     const aKey = `${a.sourcePath}:${a.line}`;
     const bKey = `${b.sourcePath}:${b.line}`;
@@ -620,10 +604,8 @@ export function rankResults(results: CompactResult[], ctx?: RankContext): Compac
     return bScore - aScore;
   });
 
-  // Diversity (AD-9): after sorting by score, allow at most PER_FILE_CAP
-  // results from any single source file. Prevents one long session from
-  // drowning out matches spread across others. The agent can still `read`
-  // deeper into a capped file.
+  // Diversity (AD-9): max PER_FILE_CAP per source file so one long session
+  // doesn't drown out matches spread across others.
   const perFile = new Map<string, number>();
   const capped: CompactResult[] = [];
   for (const r of unique) {
@@ -638,11 +620,8 @@ export function rankResults(results: CompactResult[], ctx?: RankContext): Compac
 
 // --- Public API ---
 
-/**
- * AND search: all extracted terms must appear in the same file.
- * On AND-miss, falls back to a trigram typo search (AD-12); the thesaurus
- * was removed in AD-7 (WordNet polysemy made it net-negative).
- */
+// AND search: all extracted terms must appear in the same file.
+// On AND-miss, falls back to trigram typo search (AD-12).
 export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   const started = Date.now();
   const track = (res: SearchResponse): SearchResponse => {
@@ -665,7 +644,7 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
     return track({ results: [], layer: "and", totalMatches: 0 });
   }
 
-  // Step 1: single-pass AND — one rg call, file-level AND in JS, lines for free
+  // Step 1: single-pass AND — one rg call, file-level AND in JS
   const { files: andFiles, lines: andLines } = await singlePassAndSearch(terms, signal);
   if (signal?.aborted) throw new Error("read_memory: aborted");
 
@@ -675,16 +654,13 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
     return track({ results: ranked, layer: "and", totalMatches: andLines.length });
   }
 
-  // AND-miss: last-resort trigram typo fallback (AD-12). Loosens to OR across
-  // 3-char sub-patterns so typos / partial spellings still surface something.
+  // AND-miss: trigram typo fallback (AD-12) — loosens to OR across 3-char sub-patterns
   if (signal?.aborted) throw new Error("read_memory: aborted");
   return track(await trigramFallback(terms, signal, idfWeights));
 }
 
-/**
- * Proximity search: terms must appear within N lines of each other.
- * Used for auto-injection — finds conceptually dense passages.
- */
+// Proximity search: terms must appear within N lines of each other.
+// Used for auto-injection — finds conceptually dense passages.
 export async function proximitySearch(
   terms: string[],
   windowLines: number = PROXIMITY_WINDOW,

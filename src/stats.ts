@@ -21,7 +21,7 @@ export function getMemoryStats(): MemoryStats {
 
   for (const file of files) {
     const content = fs.readFileSync(path.join(memoriesDir, file), "utf-8");
-    // --- count [User] lines (old + new format)
+    // count [User] lines (old + new format)
     const matches = content.match(/^\[(?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}\] \[User\]/gm);
     totalLines += matches?.length ?? 0;
   }

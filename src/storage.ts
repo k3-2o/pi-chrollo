@@ -18,13 +18,9 @@ export interface ConversationLine {
   timestamp: Date;
 }
 
-// --- Constants ---
-
 const GLOBAL_MEMORIES_DIR = path.join(os.homedir(), ".chrollo", "memories");
 
 let activeMemoriesDir: string | undefined;
-
-// --- Helpers ---
 
 function formatTimestamp(date: Date): string {
   const y = date.getFullYear();
@@ -70,7 +66,7 @@ function findGitRoot(startDir: string): string | undefined {
   }
 }
 
-// --- Resolve per-project memories dir (nearest .chrollo, else git root, else global) ---
+// --- Resolve per-project memories dir (nearest .chrollo/, else git root, else ~/.chrollo)
 export function resolveMemoriesDir(cwd: string): string {
   const envDir = process.env.CHROLLO_MEMORIES_DIR?.trim();
   if (envDir !== undefined && envDir !== "") {
@@ -132,14 +128,12 @@ function findSessionFileInDir(sessionId: string, dir: string): string | undefine
   return undefined;
 }
 
-// --- Public API ---
-
-// --- Ensure the memory directory exists ---
+// Ensure memory directory exists
 export function initMemoryDir(): void {
   fs.mkdirSync(memoriesDir(), { recursive: true });
 }
 
-// --- Find an existing session file by session ID prefix ---
+// Find existing session file by session ID prefix
 export function findSessionFile(sessionId: string): string | undefined {
   const dir = memoriesDir();
   const found = findSessionFileInDir(sessionId, dir);
@@ -147,7 +141,7 @@ export function findSessionFile(sessionId: string): string | undefined {
     return found;
   }
 
-  // --- fallback for sessions created before project-scoped storage ---
+  // fallback: check global dir for sessions created before project-scoped storage
   if (dir !== GLOBAL_MEMORIES_DIR) {
     return findSessionFileInDir(sessionId, GLOBAL_MEMORIES_DIR);
   }
@@ -155,7 +149,7 @@ export function findSessionFile(sessionId: string): string | undefined {
   return undefined;
 }
 
-// --- Create a new session file with YAML frontmatter ---
+// Create new session file with YAML frontmatter
 export function createSessionFile(frontmatter: SessionFrontmatter): string {
   initMemoryDir();
 
@@ -181,12 +175,11 @@ export function createSessionFile(frontmatter: SessionFrontmatter): string {
   return filePath;
 }
 
-// --- Append a conversation line ---
 export function appendLine(filePath: string, line: ConversationLine): void {
   const time = formatTimestamp(line.timestamp);
 
   if (line.role === "Agent") {
-    // --- blockquote so internal markdown doesn't clash ---
+    // blockquote so internal markdown doesn't clash
     const quoted = line.text
       .split("\n")
       .map((l) => (l.trim() === "" ? ">" : `> ${l}`))
@@ -199,7 +192,6 @@ export function appendLine(filePath: string, line: ConversationLine): void {
   }
 }
 
-// --- Append both user and agent messages for one turn ---
 export function appendTurn(
   filePath: string,
   userText: string,
@@ -208,16 +200,16 @@ export function appendTurn(
 ): void {
   appendLine(filePath, { role: "User", text: userText, timestamp });
   appendLine(filePath, { role: "Agent", text: agentText, timestamp: new Date() });
-  // --- two blank lines between turns for readability ---
+  // two blank lines between turns for readability
   fs.appendFileSync(filePath, "\n\n", "utf-8");
 }
 
-// --- Get the active memories directory path ---
+// Get the active memories directory path
 export function getMemoriesDir(): string {
   return memoriesDir();
 }
 
-// --- Global memories dir (pre-project-scoped sessions) ---
+// Global memories dir (pre-project-scoped sessions)
 export function getGlobalMemoriesDir(): string {
   return GLOBAL_MEMORIES_DIR;
 }

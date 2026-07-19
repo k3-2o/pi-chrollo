@@ -1,29 +1,20 @@
-// --- Chrollo Access Tracking (Phase 10B) ---
-//
-// Tracks when each memory line was last referenced (read via read_memory or
-// surfaced for injection). Used to reinforce recency: a memory you keep coming
-// back to stays accessible longer than one you wrote once and forgot.
-//
-// Stored at .chrollo/access.json — a flat map of "file:line" -> ISO timestamp.
-// SYNCHRONOUS I/O (learned the async lesson): the file is small (~KB, not the
-// full corpus), so readFileSync/writeFileSync are fine on the hot path. This is
-// a derived cache — deletable, never the source of truth. The verbatim memory
-// files are never modified by this module.
+// Chrollo Access Tracking (Phase 10B). Tracks when each memory line was last
+// referenced. Stored at .chrollo/access.json — flat map of file:line -> ISO
+// timestamp. Synchronous I/O (the file is small; async conversion broke
+// handler atomicity in 0.2.0). Deletable derived cache — memory files never
+// modified by this module.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getMemoriesDir } from "./storage.js";
 
-// In-memory cache. Loaded lazily on first access, reused for the session.
 let _accessCache: Map<string, Date> | null = null;
 
 function accessPath(): string {
-  // parent of the memories dir = the .chrollo/ root
   return path.join(path.dirname(getMemoriesDir()), "access.json");
 }
 
-// --- Load the access map (synchronous, cached after first call within a
-//     session). Best-effort: missing/corrupt file -> empty map.
+// Load access map (synchronous, cached after first call). Missing/corrupt file -> empty map.
 export function getAccessMap(): Map<string, Date> {
   if (_accessCache !== null) return _accessCache;
   try {
@@ -40,15 +31,13 @@ export function getAccessMap(): Map<string, Date> {
   return _accessCache;
 }
 
-// --- Look up the last-referenced time for a key. Returns undefined if the
-//     line was never referenced (falls back to creation-date decay).
+// Look up last-referenced time for a key (undefined = never referenced).
 export function getLastReferenced(key: string): Date | undefined {
   return getAccessMap().get(key);
 }
 
-// --- Record that these keys were referenced NOW. Updates the in-memory cache
-//     AND persists to disk (best-effort — write failures are swallowed so a
-//     metrics problem can never break the search path).
+// Record reference NOW for these keys. Updates in-memory cache and persists
+// to disk (best-effort — write failures swallowed).
 export function recordAccess(keys: string[]): void {
   if (keys.length === 0) return;
   const map = getAccessMap();
@@ -60,11 +49,11 @@ export function recordAccess(keys: string[]): void {
     fs.mkdirSync(path.dirname(accessPath()), { recursive: true });
     fs.writeFileSync(accessPath(), JSON.stringify(obj), "utf-8");
   } catch {
-    // best-effort: in-memory cache still updated; just not persisted
+    // best-effort: in-memory cache still updated
   }
 }
 
-// --- Drop the in-memory cache. Called at session_shutdown (like corpus freq).
+// Drop in-memory cache. Called at session_shutdown.
 export function invalidateAccessCache(): void {
   _accessCache = null;
 }

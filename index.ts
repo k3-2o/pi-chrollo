@@ -34,8 +34,6 @@ import {
 import { recordMetric } from "./src/metrics.js";
 import { invalidateAccessCache } from "./src/access.js";
 
-// --- Types ---
-
 interface PendingSession {
   sessionId: string;
   startDate: string;
@@ -43,27 +41,18 @@ interface PendingSession {
   parentSession?: string;
 }
 
-// --- Extension entry point ---
-
 export default function chrolloExtension(pi: ExtensionAPI): void {
   let currentMemoryFile: string | undefined;
   let pendingSession: PendingSession | undefined;
   let lastUserPrompt: string | undefined;
 
-  // --- Cache corpus frequency for term extraction across the session.
-  //     Pre-warmed SYNCHRONOUSLY at session_start so before_agent_start always
-  //     finds it warm (no async race, no prompt-box freeze). Computed once per
-  //     session (~280ms at startup, NOT per-prompt). ---
   let corpusFreqCache: { freq: Map<string, number>; totalFiles: number } | undefined;
 
-  // --- Injection dedup (AD-10): remember which file:line keys we already
-  //     surfaced, so follow-up turns don't re-inject the same lines. Cleared
-  //     when the prompt's distinctive terms change substantially (topic shift).
   let injectedKeys: Set<string> = new Set();
   let lastDistinctTerms: Set<string> = new Set();
   let sessionMeta: PendingSession | undefined;
 
-  // --- Lifecycle: session_start ---
+  // session_start
 
   pi.on("session_start", async (_event, ctx) => {
     setActiveMemoriesDir(ctx.cwd);
@@ -87,8 +76,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       pendingSession = { ...sessionMeta };
     }
 
-    // Pre-warm corpus frequency cache SYNCHRONOUSLY so every prompt this
-    // session finds it warm. (~280ms once at startup — not per-prompt.)
     corpusFreqCache = computeCorpusFrequency();
 
     const stats = getMemoryStats();
@@ -99,8 +86,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       );
     }
   });
-
-  // --- Ensure memory file exists ---
 
   function ensureMemoryFile(): string | undefined {
     if (currentMemoryFile !== undefined) {
@@ -127,7 +112,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     return currentMemoryFile;
   }
 
-  // --- Lifecycle: agent_end ---
+  // agent_end
 
   pi.on("agent_end", async (event, _ignoredCtx) => {
     if (lastUserPrompt === undefined) return;
@@ -165,33 +150,26 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     lastUserPrompt = undefined;
   });
 
-  // --- Lifecycle: before_agent_start (auto-injection) ---
+  // before_agent_start (auto-injection)
 
   pi.on("before_agent_start", async (event, _ctx) => {
     lastUserPrompt = event.prompt;
 
-    // --- GATE 1 (Phase 10A): skip trivial prompts. Acknowledgements, greetings,
-    //     thanks, continuations carry nothing worth a memory search. Skipping
-    //     them keeps the 50ms budget for prompts that actually need it.
+    // GATE 1: skip trivial prompts (acknowledgements/greetings — no searchable content)
     if (event.prompt.length < 10 || isTrivialPrompt(event.prompt)) return;
 
-    // Read the corpus cache SYNCHRONOUSLY. It was pre-warmed at session_start,
-    // so this is always instant — no async, no mid-handler yield, no prompt-box
-    // freeze. (The async await here is what broke 0.2.0.)
+    // Read corpus cache synchronously (pre-warmed at session_start)
     const cache = corpusFreqCache ?? computeCorpusFrequency();
     const distinctTerms = extractDistinctiveTerms(event.prompt, cache.freq, cache.totalFiles);
 
     if (distinctTerms.length < 2) return; // too vague for proximity
 
-    // Topic-change reset (AD-10) + Gate 2 (Phase 10A): pure decision.
     const decision = decideAmbientSearch(distinctTerms, lastDistinctTerms, injectedKeys);
     injectedKeys = decision.injectedKeys;
     if (decision.skip) return;
     lastDistinctTerms = decision.lastDistinctTerms;
 
-    // Proximity search with hard 50ms timeout. withInjectionBudget clears the
-    // timer as soon as proximitySearch returns, so a slow post-search path cannot
-    // exceed the budget.
+    // Proximity search with 50ms hard timeout
     try {
       const response = await withInjectionBudget(50, (signal) =>
         proximitySearch(distinctTerms, 20, signal),
@@ -199,11 +177,9 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
       if (response.results.length === 0) return;
 
-      // Dedup: drop lines we already injected on a prior turn of this topic.
       const fresh = filterInjected(response.results, injectedKeys);
       if (fresh.length === 0) return; // all already shown this topic
 
-      // Inject max 10 results + lightweight heads-up if more exist
       const topResults = { ...response, results: fresh.slice(0, 10) };
       const extra = response.totalMatches - topResults.results.length;
       let memoryContext = formatResultsForContext(topResults);
@@ -211,7 +187,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
         memoryContext += `\n(+${extra} more — use memory intelligently)`;
       }
 
-      // Record what we just injected so the next turn can skip it.
       recordInjected(topResults.results, injectedKeys);
 
       return {
@@ -222,19 +197,12 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
         },
       };
     } catch {
-      // timeout or abort — skip ambient injection, but record it so the
-      // 50ms budget failures are visible in metrics.jsonl (AD-13).
-      recordMetric({
-        kind: "inject",
-        latencyMs: 50, // the budget that was exceeded
-        resultCount: 0,
-        aborted: true,
-      });
+      recordMetric({ kind: "inject", latencyMs: 50, resultCount: 0, aborted: true });
       return;
     }
   });
 
-  // --- Lifecycle: session_shutdown ---
+  // session_shutdown
 
   pi.on("session_shutdown", async (_event, _ctx) => {
     currentMemoryFile = undefined;
@@ -247,7 +215,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     invalidateAccessCache();
   });
 
-  // --- Tool: read_memory ---
+  // read_memory tool
 
   pi.registerTool({
     name: "read_memory",
