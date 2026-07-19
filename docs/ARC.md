@@ -52,8 +52,10 @@ Layer 3: the agent iterates — re-search with different words (axiom 2)
 Term extraction splits camelCase / snake_case / kebab-case identifiers (so
 `optimizeRerenders` is searchable as "optimize") and applies light stemming
 (`deployment`→`deploy`; ripgrep `-F` substring-matching then catches every
-inflection at once). A corpus-frequency filter (cached + persisted to
-`.chrollo/freq.json`) drops words appearing in >30% of files.
+inflection at once). A corpus-frequency filter drops words appearing in >30%
+of files. The frequency index is a **synchronous module-level cache**, built
+once at `session_start` (~280ms) and reused for every prompt that session;
+cleared at `session_shutdown` so the next session rebuilds fresh.
 
 Results ranked by **distinct** matched-term count, then recency-boosted:
 
@@ -208,15 +210,25 @@ Architectural Decision (AD-n) in `.vscode/SPEC.md`. The non-obvious ones:
   today's memories parsed as "future" → zero recency boost. Fix: read local via
   the `Date(Y,M-1,D,h,m,s)` constructor. No file-format change.
 - **Stale corpus-frequency cache** (AD-2): the module-level cache survived across
-  sessions in Pi's long-running process. Fix: `invalidateCorpusCache()` at
-  session_start + after each append.
+  sessions in Pi's long-running process. Fix: clear it at `session_shutdown`, so
+  the next `session_start` rebuilds it fresh (synchronously).
 - **Single-pass AND** (AD-4): the old search spawned N ripgrep processes (one per
   term) serially. Replaced with one `rg --json` pass + JS file-level AND.
 - **30-day recency half-life** (AD-5): the inverse curve decayed too fast.
 - **Code-aware tokenizer** (AD-6): identifiers were mashed into un-greppable blobs.
 - **Thesaurus removed** (AD-7): WordNet polysemy made it net-negative.
-- **Async I/O** (AD-8): `*Sync` fs calls → `fs/promises` throughout.
 - **Metrics sidecar** (AD-13): `.chrollo/metrics.jsonl` records latency + aborts.
+- **Async I/O (AD-8) — REVERTED:** 0.2.0 originally converted the whole storage
+  layer to `fs/promises` (async). It was reverted because it destroyed the
+  atomicity the Pi event handlers rely on: `session_start` could no longer
+  guarantee the corpus cache was warm before returning, so `before_agent_start`
+  awaited a ~1.9s rebuild and froze the prompt box on the first prompt of every
+  session. Sync I/O in handlers that must run atomically is not a bug. The
+  pure-logic work (tokenizer, recency, etc.) was kept; only the async/persisted
+  machinery was rolled back.
+- **Persisted corpus cache (`.chrollo/freq.json`) — REVERTED:** shipped
+  alongside AD-8, reverted with it for the same atomicity reason. The corpus
+  frequency is now a plain synchronous module cache (once per session).
 
 ### Known limitation surfaced by metrics (post-0.2.0)
 

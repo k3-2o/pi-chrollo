@@ -45,7 +45,7 @@ Storing raw text and retrieving it verbatim **beats vector + graph + LLM by ~12 
 
 ## What You Get
 
-- **Verbatim capture** — every turn saved to `.chrollo/memories/*.md` automatically (project-scoped by default, falls back to `~/.chrollo/memories/`). All file I/O is non-blocking.
+- **Verbatim capture** — every turn saved to `.chrollo/memories/*.md` automatically (project-scoped by default, falls back to `~/.chrollo/memories/`).
 - **Zero information loss** — no compression, no summarization, no extraction
 - **Auto-inject** — proximity-based memory injection. Never blocks rendering. Injects up to 10 compact results + `(+N more — use memory intelligently)` heads-up. De-duplicated across follow-up turns of the same topic.
 - **`read_memory` tool** — single-pass AND search (all terms must co-occur). Compact output: `path:line | text`. Up to 20 results, capped at 3 per session for diversity.
@@ -53,7 +53,7 @@ Storing raw text and retrieving it verbatim **beats vector + graph + LLM by ~12 
 - **Light stemming** — `deployment` finds `deploy`; `running` finds `run`. Catches morphological variants without a model.
 - **Trigram typo fallback** — last resort on AND-miss: 3-char sub-patterns surface `receive` when you type `recieve`. No embeddings.
 - **Recency scoring** — line-level timestamps, ~30-day half-life so last-month context still ranks. Score = `distinctMatchedTerms × recencyMultiplier`.
-- **Corpus-aware term extraction** — dynamically filters words appearing in >30% of memory files, adapting to *your* vocabulary. The frequency index is cached + persisted (`.chrollo/freq.json`) so session start stays fast.
+- **Corpus-aware term extraction** — dynamically filters words appearing in >30% of memory files, adapting to *your* vocabulary. The frequency index is built once per session (kept warm for every prompt).
 - **Observability** — `.chrollo/metrics.jsonl` records every search/inject: latency, result count, and aborts. See whether the injection budget is actually being met: `grep '"aborted":true' .chrollo/metrics.jsonl`
 - **Grep-compatible** — `rg "python" .chrollo/memories/` works on any machine
 - **Zero cost** — no API keys, no LLM calls, no server to maintain

@@ -6,9 +6,9 @@ experiments-shipped convention of the existing git tags.
 ## [0.2.0] — 2026-07
 
 A correctness / recall / reliability pass driven by a full adversarial audit.
-109 tests added; `just ci` (fmt + types + smoke + test) green. No information
-lost — all memory files remain the sole source of truth; `freq.json` and
-`metrics.jsonl` are derived caches.
+A full test pipeline was added; `just ci` (fmt + types + smoke + test) green.
+No information lost — all memory files remain the sole source of truth;
+`metrics.jsonl` is a derived cache (deletable).
 
 ### Correctness
 - **Timezone fix (AD-1)** — timestamps were written local but read as UTC;
@@ -17,8 +17,9 @@ lost — all memory files remain the sole source of truth; `freq.json` and
   too fast (~7-day effective); "last month" signal now survives.
 - **Distinct-term ranking (AD-14)** — a word matched 3× no longer triples a
   line's score; distinct terms are counted.
-- **Corpus cache invalidation (AD-2)** — the frequency cache is now rebuilt at
-  session start + after each write, no longer stale across sessions.
+- **Corpus cache invalidation (AD-2)** — the module-level frequency cache is
+  cleared at session_shutdown and rebuilt fresh (synchronously) at the next
+  session_start, so it no longer goes stale across sessions.
 
 ### Recall
 - **Code-aware tokenizer (AD-6)** — splits camelCase / snake_case / kebab-case;
@@ -31,10 +32,18 @@ lost — all memory files remain the sole source of truth; `freq.json` and
 ### Performance / reliability
 - **Single-pass AND search (AD-4)** — one `rg --json` call replaces N serial
   ripgrep processes (file-level AND computed in JS).
-- **Async I/O (AD-8)** — `fs/promises` throughout; the hot `agent_end` write
-  path no longer blocks the event loop.
-- **Persisted corpus cache (AD-6)** — `.chrollo/freq.json` (fingerprinted);
-  cold session-start dropped from ~1.9s to ~95ms.
+
+> **Note on reverted work (AD-8, AD-6 cache):** 0.2.0 originally shipped an
+> async-I/O conversion (AD-8, `fs/promises` throughout) and a persisted
+> corpus cache (`.chrollo/freq.json`, fingerprinted, 1.9s→95ms cold start).
+> **Both were reverted before release.** The async conversion destroyed the
+> atomicity the Pi event handlers rely on: `session_start` could no longer
+> guarantee the corpus cache was warm before it returned, so `before_agent_start`
+> ended up `await`ing a ~1.9s rebuild and froze the prompt box on the first
+> prompt of every session. Sync I/O in handlers that must run atomically is
+> not a bug — the "non-blocking" goal solved a problem the tool didn't have.
+> The pure-logic improvements (single-pass AND, tokenizer, etc.) were kept.
+> See `docs/ARC.md` for the full write-up.
 
 ### Quality
 - **Per-file diversity cap (AD-9)** — max 3 results per session file.
