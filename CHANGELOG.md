@@ -11,6 +11,7 @@ No information lost — all memory files remain the sole source of truth;
 `metrics.jsonl` is a derived cache (deletable).
 
 ### Correctness
+
 - **Timezone fix (AD-1)** — timestamps were written local but read as UTC;
   today's memories now get their full recency boost.
 - **30-day recency half-life (AD-5)** — replaces the inverse curve that decayed
@@ -22,6 +23,7 @@ No information lost — all memory files remain the sole source of truth;
   session_start, so it no longer goes stale across sessions.
 
 ### Recall
+
 - **Code-aware tokenizer (AD-6)** — splits camelCase / snake_case / kebab-case;
   `optimizeRerenders` is now findable as "optimize".
 - **Light stemming (AD-11)** — `deployment` finds `deploy`; `running` finds
@@ -30,6 +32,7 @@ No information lost — all memory files remain the sole source of truth;
   `receive` when you type `recieve`.
 
 ### Performance / reliability
+
 - **Single-pass AND search (AD-4)** — one `rg --json` call replaces N serial
   ripgrep processes (file-level AND computed in JS).
 
@@ -46,31 +49,37 @@ No information lost — all memory files remain the sole source of truth;
 > See `docs/ARC.md` for the full write-up.
 
 ### Quality
+
 - **Per-file diversity cap (AD-9)** — max 3 results per session file.
 - **Injection dedup (AD-10)** — follow-up turns skip already-injected lines;
   resets on topic change.
 
 ### Observability
+
 - **Metrics sidecar (AD-13)** — `.chrollo/metrics.jsonl` records every
   search/inject (latency, result count, abort). `just clean-metrics` truncates.
 
 ### Removed
+
 - **Thesaurus (AD-7)** — WordNet polysemy made it net-negative
   (`build`→`physique`, `code`→`encipher`); stemming + agent iteration cover
   the morphological cases.
 - **`fuzzySearch` (AD-3)** — ~60 lines of dead code; removed.
 
 ### Engineering
+
 - Real test pipeline: `justfile` (fmt/lint/check/types/test/ci), `tsconfig.json`,
   `vitest`. Host type packages declared as devDeps so `tsc` resolves standalone.
 
 ### Known limitation (flagged, not changed in 0.2.0)
+
 Metrics exposed that `proximitySearch` (the auto-injection path) takes ~200ms on
 a ~285-file corpus — over its 50ms budget, so injection is currently aborting.
 The budget (`INJECT_BUDGET_MS`) is a tuning constant; raising it trades a little
 rendering latency for actual recall. See `docs/ARC.md`.
 
 ### Held / rejected (see SPEC §10)
+
 - Reconnect double-append fix — held pending walkthrough.
 - Auto-tag capture — held pending understanding the value.
 - `read_memory` "expand" mode — rejected by design.
@@ -83,6 +92,7 @@ Post-0.2.0 optimizations from the frontier-memory research synthesis. All stay
 in-paradigm: no LLM calls, no embeddings, no extraction. 140 tests green.
 
 ### Proactive injection (10A)
+
 - **Trivial-prompt gating** — `isTrivialPrompt()` skips the proximity search for
   acknowledgements, greetings, thanks, and continuations. One real word in the
   prompt → not trivial → search proceeds.
@@ -92,6 +102,7 @@ in-paradigm: no LLM calls, no embeddings, no extraction. 140 tests green.
 - Directly addresses the 50ms-budget aborts documented in ARC.
 
 ### Access-reinforced decay (10B)
+
 - **Access sidecar** — `.chrollo/access.json` tracks when each memory line was
   last referenced (via `read_memory` or injection). Derived cache, deletable,
   synchronous I/O.
@@ -100,13 +111,15 @@ in-paradigm: no LLM calls, no embeddings, no extraction. 140 tests green.
   memories stay accessible longer than their creation age alone would allow.
 
 ### IDF-weighted ranking (10C)
+
 - **`buildIdfWeights`** — `log(1 + totalFiles / (1 + freq))` per matched term.
   Rare terms (`k3s`) outweigh common ones (`config`) in the score.
 - **`rankResults`** now takes a `RankContext { accessMap?, idfWeights? }`. Falls
   back to flat distinct-term counting when no IDF weights are provided.
 
 ### Adversarial audit fixes
-- **F-02** — `decideAmbientSearch` now compares the *previous* prompt's
+
+- **F-02** — `decideAmbientSearch` now compares the _previous_ prompt's
   distinctive terms against the current prompt's terms. Previously the previous
   set was overwritten before the comparison, making every same-topic follow-up
   skip the search and miss fresh context.
