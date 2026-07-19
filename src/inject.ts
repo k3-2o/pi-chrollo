@@ -144,3 +144,33 @@ export function filterInjected<T extends HasKey>(results: T[], injectedKeys: Set
 export function recordInjected<T extends HasKey>(results: T[], injectedKeys: Set<string>): void {
   for (const r of results) injectedKeys.add(dedupKey(r));
 }
+
+// --- Decide whether to run the ambient (auto-injection) proximity search for
+//     this prompt. Pure: returns the new state + a skip flag. Kept in this
+//     module so it can be unit-tested without the Pi lifecycle harness.
+export interface AmbientSearchDecision {
+  skip: boolean;
+  injectedKeys: Set<string>;
+  lastDistinctTerms: Set<string>;
+}
+
+export function decideAmbientSearch(
+  distinctTerms: string[],
+  lastDistinctTerms: Set<string>,
+  injectedKeys: Set<string>,
+): AmbientSearchDecision {
+  const currentTerms = new Set(distinctTerms);
+
+  // Topic-change reset (AD-10): if this prompt shares NO distinctive term with
+  // the previous one, treat it as a new topic and clear the injected-key set.
+  const nextKeys = topicChanged(lastDistinctTerms, currentTerms) ? new Set<string>() : injectedKeys;
+
+  // --- GATE 2 (Phase 10A): identical terms + already injected -> skip.
+  //     Same distinctive terms means the same rg query -> same results ->
+  //     dedup would filter them all anyway. If even one term changed (a new
+  //     sub-question on the same topic), re-search — there might be new matches.
+  const updatedLastDistinctTerms = currentTerms;
+  const skip = nextKeys.size > 0 && sameTerms(updatedLastDistinctTerms, currentTerms);
+
+  return { skip, injectedKeys: nextKeys, lastDistinctTerms: updatedLastDistinctTerms };
+}

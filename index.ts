@@ -27,6 +27,8 @@ import {
   recordInjected,
   isTrivialPrompt,
   sameTerms,
+  decideAmbientSearch,
+  type AmbientSearchDecision,
 } from "./src/inject.js";
 import { recordMetric } from "./src/metrics.js";
 import { invalidateAccessCache } from "./src/access.js";
@@ -180,18 +182,11 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
     if (distinctTerms.length < 2) return; // too vague for proximity
 
-    // Topic-change reset (AD-10): if this prompt shares NO distinctive term with
-    // the previous one, treat it as a new topic and clear the injected-key set.
-    // Cosine-free heuristic — just set intersection.
-    const currentTerms = new Set(distinctTerms);
-    if (topicChanged(lastDistinctTerms, currentTerms)) injectedKeys = new Set();
-    lastDistinctTerms = currentTerms;
-
-    // --- GATE 2 (Phase 10A): identical terms + already injected -> skip.
-    //     Same distinctive terms means the same rg query -> same results ->
-    //     dedup would filter them all anyway. If even one term changed (a new
-    //     sub-question on the same topic), re-search — there might be new matches.
-    if (injectedKeys.size > 0 && sameTerms(lastDistinctTerms, currentTerms)) return;
+    // Topic-change reset (AD-10) + Gate 2 (Phase 10A): pure decision.
+    const decision = decideAmbientSearch(distinctTerms, lastDistinctTerms, injectedKeys);
+    injectedKeys = decision.injectedKeys;
+    if (decision.skip) return;
+    lastDistinctTerms = decision.lastDistinctTerms;
 
     // Proximity search with hard 50ms timeout
     const controller = new AbortController();
