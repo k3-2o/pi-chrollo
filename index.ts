@@ -43,10 +43,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     setActiveMemoriesDir(ctx.cwd);
-    initMemoryDir();
+    await initMemoryDir();
 
     const sessionId = ctx.sessionManager.getSessionId();
-    const existingFile = findSessionFile(sessionId);
+    const existingFile = await findSessionFile(sessionId);
 
     sessionMeta = {
       sessionId,
@@ -68,7 +68,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     invalidateCorpusCache();
     void computeCorpusFrequency(); // fire-and-forget warm-up; awaits on first use
 
-    const stats = getMemoryStats();
+    const stats = await getMemoryStats();
     if (ctx.hasUI) {
       ctx.ui.notify(
         `Chrollo: ${stats.totalLines} memories across ${stats.sessionCount} sessions`,
@@ -79,7 +79,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
   // --- Ensure memory file exists ---
 
-  function ensureMemoryFile(): string | undefined {
+  async function ensureMemoryFile(): Promise<string | undefined> {
     if (currentMemoryFile !== undefined) {
       if (fs.existsSync(currentMemoryFile)) return currentMemoryFile;
       currentMemoryFile = undefined;
@@ -99,7 +99,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
       parentSession: pendingSession.parentSession,
     };
 
-    currentMemoryFile = createSessionFile(frontmatter);
+    currentMemoryFile = await createSessionFile(frontmatter);
     pendingSession = undefined;
     return currentMemoryFile;
   }
@@ -135,10 +135,10 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
     const fullAgentText = sections.join("\n\n");
 
-    const filePath = ensureMemoryFile();
+    const filePath = await ensureMemoryFile();
     if (filePath === undefined) return;
 
-    appendTurn(filePath, lastUserPrompt, fullAgentText, new Date());
+    await appendTurn(filePath, lastUserPrompt, fullAgentText, new Date());
     // New words were just written -> drop the in-memory cache so the next search
     // reflects the updated corpus (AD-2). The persisted cache is rebuilt lazily.
     invalidateCorpusCache();

@@ -1,6 +1,7 @@
 // --- Chrollo Storage Layer ---
 
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
@@ -115,13 +116,13 @@ function sessionFilePath(sessionId: string, startDate: Date, dir: string): strin
   return path.join(dir, `${date}_${time}_${prefix}.md`);
 }
 
-function findSessionFileInDir(sessionId: string, dir: string): string | undefined {
+async function findSessionFileInDir(sessionId: string, dir: string): Promise<string | undefined> {
   if (!fs.existsSync(dir)) {
     return undefined;
   }
 
   const prefix = sessionIdPrefix(sessionId);
-  const files = fs.readdirSync(dir);
+  const files = await fsp.readdir(dir);
 
   for (const file of files) {
     if (file.endsWith(`_${prefix}.md`) && file.startsWith("20")) {
@@ -135,14 +136,14 @@ function findSessionFileInDir(sessionId: string, dir: string): string | undefine
 // --- Public API ---
 
 // --- Ensure the memory directory exists ---
-export function initMemoryDir(): void {
-  fs.mkdirSync(memoriesDir(), { recursive: true });
+export async function initMemoryDir(): Promise<void> {
+  await fsp.mkdir(memoriesDir(), { recursive: true });
 }
 
 // --- Find an existing session file by session ID prefix ---
-export function findSessionFile(sessionId: string): string | undefined {
+export async function findSessionFile(sessionId: string): Promise<string | undefined> {
   const dir = memoriesDir();
-  const found = findSessionFileInDir(sessionId, dir);
+  const found = await findSessionFileInDir(sessionId, dir);
   if (found !== undefined) {
     return found;
   }
@@ -156,8 +157,8 @@ export function findSessionFile(sessionId: string): string | undefined {
 }
 
 // --- Create a new session file with YAML frontmatter ---
-export function createSessionFile(frontmatter: SessionFrontmatter): string {
-  initMemoryDir();
+export async function createSessionFile(frontmatter: SessionFrontmatter): Promise<string> {
+  await initMemoryDir();
 
   const dir = memoriesDir();
   const startDate = new Date(frontmatter.startDate);
@@ -177,12 +178,12 @@ export function createSessionFile(frontmatter: SessionFrontmatter): string {
 
   lines.push("---", "");
 
-  fs.writeFileSync(filePath, lines.join("\n"), "utf-8");
+  await fsp.writeFile(filePath, lines.join("\n"), "utf-8");
   return filePath;
 }
 
 // --- Append a conversation line ---
-export function appendLine(filePath: string, line: ConversationLine): void {
+export async function appendLine(filePath: string, line: ConversationLine): Promise<void> {
   const time = formatTimestamp(line.timestamp);
 
   if (line.role === "Agent") {
@@ -192,24 +193,24 @@ export function appendLine(filePath: string, line: ConversationLine): void {
       .map((l) => (l.trim() === "" ? ">" : `> ${l}`))
       .join("\n");
     const formatted = `[${time}] [Agent]\n${quoted}\n`;
-    fs.appendFileSync(filePath, formatted, "utf-8");
+    await fsp.appendFile(filePath, formatted, "utf-8");
   } else {
     const formatted = `[${time}] [User]\n${line.text}\n`;
-    fs.appendFileSync(filePath, formatted, "utf-8");
+    await fsp.appendFile(filePath, formatted, "utf-8");
   }
 }
 
 // --- Append both user and agent messages for one turn ---
-export function appendTurn(
+export async function appendTurn(
   filePath: string,
   userText: string,
   agentText: string,
   timestamp: Date,
-): void {
-  appendLine(filePath, { role: "User", text: userText, timestamp });
-  appendLine(filePath, { role: "Agent", text: agentText, timestamp: new Date() });
+): Promise<void> {
+  await appendLine(filePath, { role: "User", text: userText, timestamp });
+  await appendLine(filePath, { role: "Agent", text: agentText, timestamp: new Date() });
   // --- two blank lines between turns for readability ---
-  fs.appendFileSync(filePath, "\n\n", "utf-8");
+  await fsp.appendFile(filePath, "\n\n", "utf-8");
 }
 
 // --- Get the active memories directory path ---
