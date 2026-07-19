@@ -25,6 +25,7 @@ export interface SearchResponse {
 }
 
 const MAX_RESULTS = 20;
+const PER_FILE_CAP = 3; // --- diversity: max results from any one session file (AD-9) ---
 const RECENCY_BOOST = 1.0;
 const RECENCY_HALF_LIFE_DAYS = 30;
 // --- lambda so that exp(-HALF_LIFE/lambda) = 0.5  ->  lambda = HALF_LIFE / ln(2) ---
@@ -509,7 +510,20 @@ export function rankResults(results: CompactResult[]): CompactResult[] {
     return bScore - aScore;
   });
 
-  return unique.slice(0, MAX_RESULTS);
+  // Diversity (AD-9): after sorting by score, allow at most PER_FILE_CAP
+  // results from any single source file. Prevents one long session from
+  // drowning out matches spread across others. The agent can still `read`
+  // deeper into a capped file.
+  const perFile = new Map<string, number>();
+  const capped: CompactResult[] = [];
+  for (const r of unique) {
+    const count = perFile.get(r.sourcePath) ?? 0;
+    if (count >= PER_FILE_CAP) continue;
+    perFile.set(r.sourcePath, count + 1);
+    capped.push(r);
+    if (capped.length >= MAX_RESULTS) break;
+  }
+  return capped;
 }
 
 // --- Public API ---

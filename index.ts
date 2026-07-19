@@ -21,6 +21,7 @@ import {
 import { formatResultsForContext, renderCall, renderResult } from "./src/format.js";
 import { extractText, formatToolCall } from "./src/capture.js";
 import { getMemoryStats } from "./src/stats.js";
+import { topicChanged, filterInjected, recordInjected } from "./src/inject.js";
 
 // --- Types ---
 
@@ -37,6 +38,12 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
   let currentMemoryFile: string | undefined;
   let pendingSession: PendingSession | undefined;
   let lastUserPrompt: string | undefined;
+
+  // --- Injection dedup (AD-10): remember which file:line keys we already
+  //     surfaced, so follow-up turns don't re-inject the same lines. Cleared
+  //     when the prompt's distinctive terms change substantially (topic shift).
+  let injectedKeys: Set<string> = new Set();
+  let lastDistinctTerms: Set<string> = new Set();
   let sessionMeta: PendingSession | undefined;
 
   // --- Lifecycle: session_start ---
@@ -159,6 +166,13 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
     if (distinctTerms.length < 2) return; // too vague for proximity
 
+    // Topic-change reset (AD-10): if this prompt shares NO distinctive term with
+    // the previous one, treat it as a new topic and clear the injected-key set.
+    // Cosine-free heuristic — just set intersection.
+    const currentTerms = new Set(distinctTerms);
+    if (topicChanged(lastDistinctTerms, currentTerms)) injectedKeys = new Set();
+    lastDistinctTerms = currentTerms;
+
     // Proximity search with hard 50ms timeout
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 50);
@@ -168,13 +182,20 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
       if (response.results.length === 0) return;
 
+      // Dedup: drop lines we already injected on a prior turn of this topic.
+      const fresh = filterInjected(response.results, injectedKeys);
+      if (fresh.length === 0) return; // all already shown this topic
+
       // Inject max 10 results + lightweight heads-up if more exist
-      const topResults = { ...response, results: response.results.slice(0, 10) };
+      const topResults = { ...response, results: fresh.slice(0, 10) };
       const extra = response.totalMatches - topResults.results.length;
       let memoryContext = formatResultsForContext(topResults);
       if (extra > 0) {
         memoryContext += `\n(+${extra} more — use memory intelligently)`;
       }
+
+      // Record what we just injected so the next turn can skip it.
+      recordInjected(topResults.results, injectedKeys);
 
       return {
         message: {
@@ -197,6 +218,8 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     lastUserPrompt = undefined;
     sessionMeta = undefined;
     invalidateCorpusCache();
+    injectedKeys = new Set();
+    lastDistinctTerms = new Set();
   });
 
   // --- Tool: read_memory ---

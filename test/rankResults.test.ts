@@ -68,6 +68,29 @@ describe("rankResults", () => {
     expect(rankResults(many)).toHaveLength(20);
   });
 
+  it("applies a per-file diversity cap (AD-9): max 3 from any one file", () => {
+    // 5 results from one file, 1 each from 4 others. After the cap, the one
+    // file contributes 3 and the 4 others contribute 1 each = 7 total.
+    const same: CompactResult[] = Array.from({ length: 5 }, (_, i) =>
+      mk({ sourcePath: "/marathon.md", line: i + 1, matchedTerms: ["auth", "token"] }),
+    );
+    const others: CompactResult[] = ["a", "b", "c", "d"].map((s, i) =>
+      mk({ sourcePath: `/${s}.md`, line: 1, matchedTerms: ["auth"] }),
+    );
+    const out = rankResults([...same, ...others]);
+    const fromMarathon = out.filter((r) => r.sourcePath === "/marathon.md");
+    expect(fromMarathon.length).toBeLessThanOrEqual(3);
+    expect(out.length).toBe(7); // 3 + 4
+  });
+
+  it("per-file cap does not drop below-highest matches unnecessarily (still returns up to MAX)", () => {
+    // 30 distinct files, one match each -> 30 results, but capped at MAX_RESULTS=20
+    const many: CompactResult[] = Array.from({ length: 30 }, (_, i) =>
+      mk({ sourcePath: `/f${i}.md`, line: 1, matchedTerms: ["x"] }),
+    );
+    expect(rankResults(many)).toHaveLength(20);
+  });
+
   it("returns [] for empty input", () => {
     expect(rankResults([])).toEqual([]);
   });
