@@ -76,13 +76,17 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     invalidateCorpusCache();
     void computeCorpusFrequency(); // fire-and-forget warm-up; awaits on first use
 
-    const stats = await getMemoryStats();
-    if (ctx.hasUI) {
-      ctx.ui.notify(
-        `Chrollo: ${stats.totalLines} memories across ${stats.sessionCount} sessions`,
-        "info",
-      );
-    }
+    // Notify asynchronously — don't block startup on a full corpus read.
+    // getMemoryStats() reads all session files; deferring it keeps the extension
+    // list from hanging. The notify appears a moment later, which is fine.
+    void getMemoryStats().then((stats) => {
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `Chrollo: ${stats.totalLines} memories across ${stats.sessionCount} sessions`,
+          "info",
+        );
+      }
+    });
   });
 
   // --- Ensure memory file exists ---
@@ -147,9 +151,12 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
     if (filePath === undefined) return;
 
     await appendTurn(filePath, lastUserPrompt, fullAgentText, new Date());
-    // New words were just written -> drop the in-memory cache so the next search
-    // reflects the updated corpus (AD-2). The persisted cache is rebuilt lazily.
-    invalidateCorpusCache();
+    // NOTE: we do NOT invalidate the corpus cache here. The cache is rebuilt at
+    // session_start (fixing the cross-session staleness bug AD-2), and within a
+    // session a newly-written word being absent from the freq map for one prompt
+    // is harmless (it just scores as "distinctive" — which is correct). Inlining
+    // an invalidate here was forcing a 58ms cache reload on EVERY prompt after
+    // turn 1, causing the prompt-input lag. See docs/ARC.md.
     lastUserPrompt = undefined;
   });
 

@@ -337,16 +337,27 @@ export function recencyMultiplier(lineDate: Date | undefined): number {
 // memories/ — otherwise it'd be scanned as a memory file). Fingerprinted by
 // (fileCount, totalBytes) so it's reused only when the corpus is unchanged;
 // rebuilt lazily on first search after any change. Invalidated explicitly on
-// session_start and after each agent_end append (see invalidateCorpusCache()).
+// session_start only (the cross-session staleness fix AD-2). NOT invalidated
+// after each append within a session — see invalidateCorpusCache() docstring.
 
 let _corpusFreqCache: Map<string, number> | null = null;
 let _corpusTotalFiles = 0;
+// Memoize the IN-FLIGHT computation so concurrent callers (e.g. session_start
+// pre-warm racing the first before_agent_start) share one read pass instead of
+// double-reading the corpus.
+let _corpusFreqPromise: Promise<{ freq: Map<string, number>; totalFiles: number }> | null = null;
 
-// --- Invalidate the in-memory cache. Call at session_start and after each
-//     successful append so the next search sees the new words (AD-2). ---
+// --- Invalidate the in-memory cache. Called at session_start so a fresh build
+//     runs (fixes the cross-session staleness bug AD-2 — the module cache used
+//     to survive the whole process lifetime). NOT called after each append:
+//     within a session, a freshly-written word being absent from the freq map
+//     for one prompt is harmless (it scores as "distinctive", which is correct),
+//     and invalidating here would force a 58ms cache reload on every prompt
+//     (the prompt-input lag regression). ---
 export function invalidateCorpusCache(): void {
   _corpusFreqCache = null;
   _corpusTotalFiles = 0;
+  _corpusFreqPromise = null;
 }
 
 function corpusCachePath(): string {
@@ -370,7 +381,26 @@ export async function computeCorpusFrequency(): Promise<{
   if (_corpusFreqCache !== null) {
     return { freq: _corpusFreqCache, totalFiles: _corpusTotalFiles };
   }
+  // Dedupe concurrent cold-builds: share the in-flight promise.
+  if (_corpusFreqPromise !== null) {
+    return _corpusFreqPromise;
+  }
+  _corpusFreqPromise = (async () => {
+    const result = await buildCorpusFrequency();
+    _corpusFreqCache = result.freq;
+    _corpusTotalFiles = result.totalFiles;
+    _corpusFreqPromise = null; // done; future calls hit the cache
+    return result;
+  })();
+  return _corpusFreqPromise;
+}
 
+// --- The actual corpus read (persisted + parallel). Split out so the public
+//     function can memoize the in-flight promise around it. ---
+async function buildCorpusFrequency(): Promise<{
+  freq: Map<string, number>;
+  totalFiles: number;
+}> {
   const dir = getMemoriesDir();
   if (!fs.existsSync(dir)) {
     _corpusFreqCache = new Map();
@@ -405,8 +435,6 @@ export async function computeCorpusFrequency(): Promise<{
     }
   }
 
-  _corpusFreqCache = freq;
-  _corpusTotalFiles = files.length;
   trySavePersisted(corpusCachePath(), files.length, totalBytes, freq);
   return { freq, totalFiles: files.length };
 }
