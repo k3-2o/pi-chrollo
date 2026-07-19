@@ -117,5 +117,7 @@ describe("grepSearch (single-pass AND via public API)", () => {
   it("returns empty (not junk) when no file has all terms", async () => {
     const res = await grepSearch("alpha nonexistentterm");
     expect(res.results).toEqual([]);
+    expect(res.layer).toBe("and"); // never "and+thesaurus" anymore (AD-7)
+    expect(res.totalMatches).toBe(0);
   });
 });

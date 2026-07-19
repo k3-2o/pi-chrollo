@@ -2,8 +2,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
-import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getMemoriesDir } from "./storage.js";
@@ -21,7 +19,7 @@ export interface CompactResult {
 
 export interface SearchResponse {
   results: CompactResult[];
-  layer: "and" | "and+thesaurus" | "proximity" | "fuzzy";
+  layer: "and" | "proximity";
   totalMatches: number;
 }
 
@@ -230,34 +228,6 @@ export function recencyMultiplier(lineDate: Date | undefined): number {
   return 1 + RECENCY_BOOST * Math.exp(-daysSince / RECENCY_LAMBDA);
 }
 
-// --- Thesaurus (lazy-loaded, never used in auto-injection) ---
-
-let _thesaurusCache: Record<string, string[]> | null = null;
-
-function loadThesaurus(): Record<string, string[]> {
-  if (_thesaurusCache !== null) return _thesaurusCache;
-
-  const userPath = path.join(os.homedir(), ".chrollo", "thesaurus.json");
-  try {
-    const data = fs.readFileSync(userPath, "utf-8");
-    _thesaurusCache = JSON.parse(data) as Record<string, string[]>;
-    return _thesaurusCache;
-  } catch {
-    // fall through
-  }
-
-  try {
-    const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-    const bundledPath = path.join(extensionDir, "..", "thesaurus.json");
-    const data = fs.readFileSync(bundledPath, "utf-8");
-    _thesaurusCache = JSON.parse(data) as Record<string, string[]>;
-  } catch {
-    _thesaurusCache = {};
-  }
-
-  return _thesaurusCache;
-}
-
 // --- Corpus word frequency (for filtering common words) ---
 
 let _corpusFreqCache: Map<string, number> | null = null;
@@ -407,125 +377,6 @@ export async function singlePassAndSearch(
   return { files: andFiles, lines };
 }
 
-/**
- * Grouped AND search: AND between groups, OR within each group.
- * First group is expanded with synonyms (OR). Remaining groups are individual terms (AND).
- */
-async function groupedAndSearch(
-  topGroup: string[],
-  remainingTerms: string[],
-  signal?: AbortSignal,
-): Promise<string[]> {
-  const dir = getMemoriesDir();
-  if (!fs.existsSync(dir)) return [];
-
-  // Get file set for the top group (OR: any term in the group)
-  const topFlags: string[] = [];
-  for (const t of topGroup) topFlags.push("-e", t);
-
-  let topFiles: Set<string>;
-  try {
-    const { stdout } = await execFileAsync("rg", ["-l", "-i", "-F", ...topFlags, dir], {
-      signal,
-      timeout: 3000,
-      maxBuffer: 1024 * 1024,
-    });
-    topFiles = new Set(
-      stdout
-        .trim()
-        .split("\n")
-        .filter((l) => l.length > 0),
-    );
-  } catch {
-    return [];
-  }
-
-  if (topFiles.size === 0) return [];
-
-  // AND with each remaining term
-  let result = topFiles;
-  for (const term of remainingTerms) {
-    try {
-      const { stdout } = await execFileAsync("rg", ["-l", "-i", "-F", "-e", term, dir], {
-        signal,
-        timeout: 3000,
-        maxBuffer: 1024 * 1024,
-      });
-      const termFiles = new Set(
-        stdout
-          .trim()
-          .split("\n")
-          .filter((l) => l.length > 0),
-      );
-      result = new Set([...result].filter((x) => termFiles.has(x)));
-      if (result.size === 0) return [];
-    } catch {
-      return [];
-    }
-  }
-
-  return [...result];
-}
-
-// --- Get raw matching lines from specific files ---
-
-async function getMatchingLines(
-  terms: string[],
-  files: string[],
-  signal?: AbortSignal,
-): Promise<CompactResult[]> {
-  if (files.length === 0) return [];
-
-  const termFlags: string[] = [];
-  for (const term of terms) {
-    termFlags.push("-e", term);
-  }
-
-  try {
-    const { stdout } = await execFileAsync(
-      "rg",
-      [
-        "--json",
-        "-n",
-        "-F",
-        "-i",
-        ...termFlags,
-        "--", // --- end of flags, positional files follow ---
-        ...files,
-      ],
-      { signal, timeout: 3000, maxBuffer: 5 * 1024 * 1024 },
-    );
-
-    const results: CompactResult[] = [];
-    for (const raw of stdout.trim().split("\n")) {
-      if (raw.length === 0) continue;
-      let ev: any;
-      try {
-        ev = JSON.parse(raw);
-      } catch {
-        continue;
-      }
-      if (ev.type !== "match") continue;
-
-      const text = (ev.data.lines.text as string).replace(/\n$/, "");
-      results.push({
-        text,
-        source: path.basename(ev.data.path.text),
-        sourcePath: ev.data.path.text,
-        line: ev.data.line_number,
-        matchedTerms: (ev.data.submatches as Array<{ match: { text: string } }>).map((s) =>
-          s.match.text.toLowerCase(),
-        ),
-        lineDate: parseLineDate(text),
-      });
-    }
-
-    return results.filter((r) => !isToolLine(r.text));
-  } catch {
-    return [];
-  }
-}
-
 // --- Filter tool-call lines from search results ---
 // formatToolCall wraps every tool invocation in <tool>...</tool>,
 // making them trivially distinguishable from prose.
@@ -576,8 +427,8 @@ export function rankResults(results: CompactResult[]): CompactResult[] {
 
 /**
  * AND search: all extracted terms must appear in the same file.
- * Falls back to thesaurus expansion on the single most distinctive term
- * if AND returns nothing.
+ * On AND-miss, returns empty — the agent re-searches with different words
+ * (thesaurus removed in AD-7; WordNet polysemy made it net-negative).
  */
 export async function grepSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   if (signal?.aborted) throw new Error("read_memory: aborted");
@@ -598,27 +449,9 @@ export async function grepSearch(query: string, signal?: AbortSignal): Promise<S
     return { results: ranked, layer: "and", totalMatches: andLines.length };
   }
 
-  // Step 2: Thesaurus fallback — expand most distinctive term, AND with remaining
-  const topTerm = terms[0];
-  const thesaurus = loadThesaurus();
-  const synonyms = thesaurus[topTerm];
-  if (synonyms === undefined || synonyms.length === 0) {
-    return { results: [], layer: "and+thesaurus", totalMatches: 0 };
-  }
-
-  // Grouped AND: (topTerm OR syn1 OR syn2) AND remainingTerms
-  const topGroup = [topTerm, ...synonyms];
-  const remaining = terms.slice(1);
-  const groupedFiles = await groupedAndSearch(topGroup, remaining, signal);
-  if (signal?.aborted) throw new Error("read_memory: aborted");
-
-  if (groupedFiles.length === 0) {
-    return { results: [], layer: "and+thesaurus", totalMatches: 0 };
-  }
-
-  const lines = await getMatchingLines(terms, groupedFiles, signal);
-  const ranked = rankResults(lines);
-  return { results: ranked, layer: "and+thesaurus", totalMatches: lines.length };
+  // AND-miss: thesaurus fallback removed (AD-7). Return empty; the agent
+  // iterates with different terms (axiom 2: the agent is always in the loop).
+  return { results: [], layer: "and", totalMatches: 0 };
 }
 
 /**
