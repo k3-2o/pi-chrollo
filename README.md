@@ -1,59 +1,65 @@
 # Chrollo
 
-> Zero-cost agentic memory for Pi. Verbatim markdown + ripgrep. No LLM calls, no embeddings, no daemon.
+> A retrieval layer for Pi's native session history. Search past conversations, read matched windows. No storage, no capture, no injection.
 
----
+## Why
+
+Pi records every session to disk as `.jsonl`. Nothing in Pi lets you search across that history when you're back in a conversation. Chrollo fills that one gap: **find what you worked on before, when you ask for it.**
+
+It does not capture, summarize, store, or inject anything. Pi is the source of truth; Chrollo only reads it.
 
 ## Quick Start
 
-```bash
-# Prerequisites
-sudo apt install ripgrep          # Linux
-brew install ripgrep              # macOS
+Requires [ripgrep](https://github.com/BurntSushi/ripgrep) on your `PATH`.
 
-# Install
+```bash
+sudo apt install ripgrep      # Linux
+brew install ripgrep          # macOS
+
 pi install npm:@k3_2o/pi-chrollo
 ```
 
-That's it. Your agent now remembers every turn. Try asking about something you worked on yesterday.
+Then in any Pi session, ask about something from a past conversation — the agent searches your history and reads back the relevant turns.
 
----
+## How It Works
 
-## What Chrollo Is
+Two tools, one workflow:
 
-A Pi extension that stores every conversation turn verbatim in plain markdown files and retrieves them with ripgrep. No compression, no vectors, no extraction — just a file per session, findable by grep.
+1. **`search_memory`** — search past sessions by keyword. Returns markers like `path:line | role: preview`, ranked by relevance and recency.
+2. **`read_memory`** — read a bounded window around a marker, rendered readably (`[HH:MM] role: text`).
 
-## Why Verbatim
+The agent calls `search_memory` when you reference past work, picks a marker, then calls `read_memory` with that marker's line number to see the surrounding context.
 
-Every other memory system compresses at write time — they decide what's important before they know what you'll ask. Chrollo stores everything and lets the agent figure out relevance at query time. The agent can always search again, read around a match, or try different keywords.
+```
+you:    "what did we decide about the k3s ingress?"
+agent:  search_memory("k3s ingress")  → 15 markers
+        read_memory(path, offset=77, limit=10)  → readable window
+```
 
-This approach (verbatim raw text) scored **92.0% accuracy** on the [locomo](https://agentmemorybenchmark.ai/dataset/locomo) agent-memory benchmark — ahead of vector+graph+LLM systems (80.3%) — at the cost of using ~2.4× more context tokens. Every design decision in Chrollo follows from that trade-off.
+## What It Does and Doesn't Do
 
-## Key Features
+| | |
+|---|---|
+| **Searches** | All of Pi's session history, by keyword |
+| **Stores** | Nothing. Reads Pi's existing `.jsonl` files |
+| **Captures** | Nothing. Pi already captures every turn |
+| **Injects** | Nothing. You decide when to recall |
+| **Calls an LLM** | Never |
+| **Needs a daemon** | No. One binary (ripgrep) + native Node |
 
-- **Auto-capture** — every turn saved to `.chrollo/memories/` automatically (project-scoped or global)
-- **`read_memory` tool** — single-pass AND search with stemming and trigram typo fallback
-- **Smart injection** — proximity-based recall before each prompt, gated on non-trivial prompts with new distinctive terms
-- **Recency ranking** — line-level timestamps with 30-day half-life and IDF-weighted term scoring
-- **Observability** — `.chrollo/metrics.jsonl` records every search/inject with latency and abort status
+Tool outputs and internal reasoning are filtered out automatically — only real conversation turns appear in results and reads.
 
-## Comparison
+## Ranking
 
-|                 | Others                               | Chrollo                  |
-| --------------- | ------------------------------------ | ------------------------ |
-| Write-time cost | LLM compression on every observation | $0 — append to a file    |
-| Storage         | Binary KV store (unreadable)         | Plain markdown           |
-| Search          | BM25 + vector + graph                | ripgrep + stemming       |
-| Dependencies    | Binary daemon + npm deps             | Zero (Node.js + ripgrep) |
+Results are ranked by:
 
-## Where to Go Next
+- **Term match** — how many of your search words appear, with saturation (5 hits isn't 5× better than 1)
+- **Length** — a match in a short line ranks above one in a long line
+- **Recency** — 30-day half-life; recent work surfaces above old
+- **Same project** — lines from the current working directory get a mild boost
 
-- **[Tutorial](docs/TUTORIAL.md)** — 5-minute walkthrough: install, capture, search
-- **[Architecture & Design](docs/ARC.md)** — how Chrollo works, trade-offs, what's not built
-- **[How-to Guides](docs/GUIDES.md)** — project-scoped storage, import, monitoring, search tips
-- **[Importing Existing Sessions](IMPORT.md)** — bring your Pi history into Chrollo
-- **[Changelog](CHANGELOG.md)** — version history
+Rare terms are **not** weighted above common ones. You already chose the words by typing them; the tool trusts that choice rather than scanning the whole corpus to second-guess it. If a search misses, search again with different words.
 
 ## License
 
-MIT — see LICENSE.
+MIT — see [LICENSE](LICENSE).

@@ -1,11 +1,12 @@
 {
   "name": "@k3_2o/pi-chrollo",
-  "version": "0.2.0",
-  "description": "Retrieval layer over Pi's native sessions — ripgrep + JSONL, zero own storage",
+  "version": "0.3.0",
+  "description": "Retrieval layer over Pi's native sessions — search past conversations, read matched windows. No capture, no storage, no injection.",
   "keywords": [
     "pi-package",
-    "memory",
-    "agent"
+    "retrieval",
+    "search",
+    "sessions"
   ],
   "author": "k3_2o",
   "license": "MIT",
@@ -18,17 +19,16 @@
     "url": "git+https://github.com/k3-2o/pi-chrollo.git"
   },
   "scripts": {
-    "format": "prettier --write 'index.ts' 'src/*.ts'",
-    "format:check": "prettier --check 'index.ts' 'src/*.ts'",
-    "smoke": "tsx -e \"import './index'; console.log('OK')\"",
-    "check": "npm run format:check && npm run smoke"
+    "smoke": "tsx -e \"import './index'; console.log('OK')\""
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
     "@earendil-works/pi-tui": "^0.80.10",
     "@types/node": "^26.1.1",
     "prettier": "^3.5.3",
-    "typebox": "^1.1.38",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   },
