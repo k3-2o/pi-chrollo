@@ -20,7 +20,7 @@
   "scripts": {
     "format": "prettier --write 'index.ts' 'src/*.ts'",
     "format:check": "prettier --check 'index.ts' 'src/*.ts'",
-    "smoke": "tsx -e \"import './index'; import './src/tokenize'; import './src/bm25'; import './src/normalize'; import './src/corpus'; import './src/rank'; import './src/format'; import './src/search'; console.log('OK')\"",
+    "smoke": "tsx -e \"import './index'; import './src/tokenize'; import './src/bm25'; import './src/normalize'; import './src/corpus'; import './src/rank'; import './src/format'; import './src/search'; import './src/read'; console.log('OK')\"",
     "check": "npm run format:check && npm run smoke"
   },
   "devDependencies": {
