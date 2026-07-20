@@ -1,12 +1,16 @@
-// Chrollo rank — scoring orchestration. Combines BM25 (term relevance),
-// recency (freshness), and a same-project cwd boost. Also hosts the dedup
-// utilities ported fresh from the old inject.ts (the auto-injection gating
-// half is gone; only the line-key dedup trio survives).
+// Chrollo rank — scoring orchestration. Combines term relevance (TF-saturation
+// with length normalization), recency (freshness), and a same-project cwd
+// boost. Also hosts the dedup utilities ported fresh from the old inject.ts
+// (the auto-injection gating half is gone; only the line-key dedup trio
+// survives).
+//
+// NO global corpus stats — the IDF/rare-term component was the 13s-freeze bug
+// (SPEC §3.3) and is permanently dropped. avgLen is computed locally from the
+// candidate set, not scanned from disk.
 
-import type { CorpusStats } from "./corpus.js";
 import type { MessageRecord } from "./normalize.js";
 import { tokenize, groupWithStem } from "./tokenize.js";
-import { bm25 } from "./bm25.js";
+import { tfSaturation } from "./score.js";
 
 const RECENCY_HALF_LIFE_DAYS = 30;
 const RECENCY_BOOST = 1.0; // multiplier range [1.0, 1.0 + RECENCY_BOOST]
@@ -33,14 +37,14 @@ export function cwdBoost(lineCwd?: string, sessionCwd?: string): number {
   return lineCwd === sessionCwd ? CWD_BOOST : 1.0;
 }
 
-// BM25 sum across query terms present in the line, × recency × cwd boost.
-// Stem-aware: a query term and its light stem are counted as the same term so
-// that a line surfaced via a stemmed rg match still scores correctly
+// TF-saturation sum across query terms present in the line, × recency × cwd
+// boost. Stem-aware: a query term and its light stem are counted as the same
+// term so that a line surfaced via a stemmed rg match still scores correctly
 // (query "deployment" matches a line containing "deploy").
 export function scoreLine(
   record: MessageRecord,
   queryTerms: string[],
-  stats: CorpusStats,
+  avgLen: number,
   lineCwd?: string,
   sessionCwd?: string,
 ): number {
@@ -49,20 +53,16 @@ export function scoreLine(
   const tokenCount = new Map<string, number>();
   for (const t of tokens) tokenCount.set(t, (tokenCount.get(t) ?? 0) + 1);
 
-  let bm25sum = 0;
+  let score = 0;
   for (const term of queryTerms) {
     const group = groupWithStem(term);
     let tf = 0;
-    let df = 0;
-    for (const form of group) {
-      tf += tokenCount.get(form) ?? 0;
-      df += stats.docFreq.get(form) ?? 0;
-    }
+    for (const form of group) tf += tokenCount.get(form) ?? 0;
     if (tf === 0) continue; // term (nor its stem) in this line — contributes 0
-    bm25sum += bm25(tf, lineLen, stats.avgLen, df, stats.totalDocs);
+    score += tfSaturation(tf, lineLen, avgLen);
   }
 
-  return bm25sum * recencyMultiplier(record.timestamp) * cwdBoost(lineCwd, sessionCwd);
+  return score * recencyMultiplier(record.timestamp) * cwdBoost(lineCwd, sessionCwd);
 }
 
 export interface RankedResult {
@@ -72,13 +72,17 @@ export interface RankedResult {
 }
 
 // Score, dedup by lineKey (defensive against rg returning a line twice), and
-// sort by score descending. Pure given the inputs.
+// sort by score descending. Pure given the inputs. Computes avgLen locally
+// from the candidate set — no global scan.
 export function rankCandidates(
   candidates: { record: MessageRecord; lineCwd?: string }[],
   queryTerms: string[],
-  stats: CorpusStats,
   sessionCwd?: string,
 ): RankedResult[] {
+  let totalLen = 0;
+  for (const c of candidates) totalLen += tokenize(c.record.text).length;
+  const avgLen = candidates.length > 0 ? totalLen / candidates.length : 0;
+
   const seen = new Set<string>();
   const scored: RankedResult[] = [];
   for (const c of candidates) {
@@ -88,7 +92,7 @@ export function rankCandidates(
     scored.push({
       record: c.record,
       lineCwd: c.lineCwd,
-      score: scoreLine(c.record, queryTerms, stats, c.lineCwd, sessionCwd),
+      score: scoreLine(c.record, queryTerms, avgLen, c.lineCwd, sessionCwd),
     });
   }
   scored.sort((a, b) => b.score - a.score);

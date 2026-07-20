@@ -4,7 +4,7 @@ import {
   stem,
   groupWithStem,
   trigramRegex,
-  extractDistinctiveTerms,
+  queryTerms,
   STOP_WORDS,
 } from "../src/tokenize";
 
@@ -117,41 +117,28 @@ describe("trigramRegex", () => {
   });
 });
 
-describe("extractDistinctiveTerms", () => {
+describe("queryTerms", () => {
   it("returns nothing for a query of only stopwords/short tokens", () => {
-    expect(extractDistinctiveTerms("the a an", new Map(), 100)).toEqual([]);
+    expect(queryTerms("the a an")).toEqual([]);
   });
 
-  it("returns raw terms as fallback when corpus is empty", () => {
-    const terms = extractDistinctiveTerms("docker compose port", new Map(), 0);
-    expect(terms).toEqual(["docker", "compose", "port"]);
+  it("returns content words (stopwords dropped)", () => {
+    expect(queryTerms("docker compose port")).toEqual(["docker", "compose", "port"]);
   });
 
-  it("filters out terms appearing in ≥ 30% of documents", () => {
-    // 'config' appears in 40/100 docs (40%), 'docker' in 5/100 (5%)
-    const freq = new Map<string, number>([
-      ["config", 40],
-      ["docker", 5],
-    ]);
-    const terms = extractDistinctiveTerms("fix config docker", freq, 100);
-    expect(terms).toContain("docker");
-    expect(terms).not.toContain("config");
+  it("does not filter by corpus rarity (no dictionary — SPEC §3.3)", () => {
+    // 'config' would have been filtered as too-common under the old rarity
+    // filter. Now it's kept — the user typed it, it stays.
+    expect(queryTerms("fix config docker")).toEqual(["fix", "config", "docker"]);
   });
 
-  it("orders least-frequent terms first", () => {
-    const freq = new Map<string, number>([
-      ["alpha", 20],
-      ["beta", 2],
-      ["gamma", 10],
-    ]);
-    const terms = extractDistinctiveTerms("alpha beta gamma", freq, 100);
-    expect(terms.indexOf("beta")).toBeLessThan(terms.indexOf("gamma"));
-    expect(terms.indexOf("gamma")).toBeLessThan(terms.indexOf("alpha"));
+  it("preserves input order (no rarity reordering)", () => {
+    expect(queryTerms("alpha beta gamma")).toEqual(["alpha", "beta", "gamma"]);
   });
 
-  it("caps at 5 terms", () => {
-    const terms = extractDistinctiveTerms("alpha beta gamma delta epsilon zeta eta", new Map(), 0);
-    expect(terms.length).toBeLessThanOrEqual(5);
+  it("caps at 8 terms", () => {
+    const terms = queryTerms("alpha beta gamma delta epsilon zeta eta theta iota");
+    expect(terms.length).toBeLessThanOrEqual(8);
   });
 });
 

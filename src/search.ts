@@ -8,9 +8,9 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { tokenize, groupWithStem, trigramRegex, extractDistinctiveTerms } from "./tokenize.js";
+import { groupWithStem, trigramRegex, queryTerms } from "./tokenize.js";
 import { parseLine } from "./normalize.js";
-import { getCorpusStats, defaultRoot, type CorpusStats } from "./corpus.js";
+import { defaultRoot, readSessionCwd } from "./corpus.js";
 import { rankCandidates, diversityCap } from "./rank.js";
 import { formatSearchLine } from "./format.js";
 import type { MessageRecord } from "./normalize.js";
@@ -79,25 +79,27 @@ export function parseRgJson(stdout: string): RgMatch[] {
   return out;
 }
 
-// Convert rg matches into ranked, formatted search results. Pure given stats
-// + sessionCwd + the matches. The structural filter (drop non-message lines
-// and tool outputs) happens here via parseLine.
+// Convert rg matches into ranked, formatted search results. Pure given
+// sessionCwd + the matches. The structural filter (drop non-message lines and
+// tool outputs) happens here via parseLine. cwds are read lazily, one per
+// unique matched file (cheap, never blocks on a corpus scan).
 export function buildSearchResults(
   matches: RgMatch[],
-  queryTerms: string[],
-  stats: CorpusStats,
+  terms: string[],
   sessionCwd?: string,
   opts: { maxResults?: number; perFileCap?: number } = {},
 ): string[] {
+  const cwdCache = new Map<string, string | undefined>();
   const candidates: { record: MessageRecord; lineCwd?: string }[] = [];
   for (const m of matches) {
     const rec = parseLine(m.path, m.line, m.text);
     if (rec === null || rec.kind !== "message") continue; // structural filter
     if (rec.text.length === 0) continue; // nothing to show
-    candidates.push({ record: rec, lineCwd: stats.fileCwd.get(m.path) });
+    if (!cwdCache.has(m.path)) cwdCache.set(m.path, readSessionCwd(m.path));
+    candidates.push({ record: rec, lineCwd: cwdCache.get(m.path) });
   }
 
-  const ranked = rankCandidates(candidates, queryTerms, stats, sessionCwd);
+  const ranked = rankCandidates(candidates, terms, sessionCwd);
   const capped = diversityCap(ranked, opts.perFileCap ?? PER_FILE_CAP).slice(
     0,
     opts.maxResults ?? MAX_RESULTS,
@@ -117,21 +119,18 @@ export async function search(
 ): Promise<string[]> {
   const root = opts.root ?? defaultRoot();
   const runRg = opts.runRg ?? runRipgrep;
-  const stats = getCorpusStats(root);
 
-  // Distinctive terms only: filters stopwords and corpus-common terms, caps at
-  // 5. Sending raw tokens would flood rg with over-matching stems (e.g.
-  // 'docker' -> 'dock' matches a huge swath of the corpus and blows the buffer).
-  const terms = extractDistinctiveTerms(query, stats.docFreq, stats.totalDocs);
+  // Content words only (stopwords dropped). No corpus dictionary — the rarity
+  // filter that needed one was the 13s-freeze bug (SPEC §3.3), permanently gone.
+  const terms = queryTerms(query);
   if (terms.length === 0) return [];
 
-  // Expand each term into [term, stem] and flatten — rg ORs them, then we
-  // AND at the file/line level in rankCandidates (a line only scores if it
-  // actually contains the term or its stem).
+  // Expand each term into [term, stem] and flatten — rg ORs them, then a line
+  // only scores if it actually contains the term or its stem (scoreLine).
   const patterns = terms.flatMap(groupWithStem);
   const matches = await runRg(patterns, root);
 
-  let results = buildSearchResults(matches, terms, stats, opts.sessionCwd);
+  let results = buildSearchResults(matches, terms, opts.sessionCwd);
   if (results.length > 0) return results;
 
   // Zero results — trigram typo fallback (one retry, OR of all trigram regexes).
@@ -141,7 +140,7 @@ export async function search(
   // the default runRipgrep uses -F which would mis-interpret regex chars, so
   // for the fallback we call rg directly with regex mode.
   const fallbackMatches = await runRgRegex(trigramPatterns, root, opts.runRg ?? null);
-  return buildSearchResults(fallbackMatches, terms, stats, opts.sessionCwd);
+  return buildSearchResults(fallbackMatches, terms, opts.sessionCwd);
 }
 
 // Trigram fallback needs regex matching (-F off). If the caller injected a

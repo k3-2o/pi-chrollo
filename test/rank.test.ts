@@ -10,7 +10,6 @@ import {
   recordInjected,
   filePathOf,
 } from "../src/rank";
-import type { CorpusStats } from "../src/corpus";
 import type { MessageRecord } from "../src/normalize";
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -27,15 +26,6 @@ function makeRecord(
     toolCalls: [],
     timestamp: opts.ts ?? 0,
     lineKey: `${opts.path ?? "/p/s.jsonl"}:${opts.line ?? 1}`,
-  };
-}
-
-function makeStats(over: Partial<CorpusStats> = {}): CorpusStats {
-  return {
-    docFreq: new Map(over.docFreq),
-    avgLen: over.avgLen ?? 10,
-    totalDocs: over.totalDocs ?? 100,
-    fileCwd: new Map(over.fileCwd),
   };
 }
 
@@ -57,7 +47,6 @@ describe("recencyMultiplier", () => {
   });
 
   it("respects a custom half-life", () => {
-    // 7-day half-life: one week ago ≈ 1.5
     expect(recencyMultiplier(Date.now() - 7 * DAY_MS, 7)).toBeCloseTo(1.5, 1);
   });
 });
@@ -81,86 +70,77 @@ describe("cwdBoost", () => {
 describe("scoreLine", () => {
   it("scores > 0 when the line contains the query term", () => {
     const rec = makeRecord("docker compose port mapping");
-    expect(
-      scoreLine(rec, ["docker"], makeStats({ docFreq: new Map([["docker", 5]]) })),
-    ).toBeGreaterThan(0);
+    expect(scoreLine(rec, ["docker"], 10)).toBeGreaterThan(0);
   });
 
   it("scores 0 when the line contains none of the query terms", () => {
     const rec = makeRecord("docker compose port mapping");
-    expect(scoreLine(rec, ["kubernetes"], makeStats())).toBe(0);
+    expect(scoreLine(rec, ["kubernetes"], 10)).toBe(0);
   });
 
-  it("scores a rare term higher than a common term (at equal tf/length)", () => {
-    const rec = makeRecord("alpha beta");
-    const stats = makeStats({
-      docFreq: new Map([
-        ["alpha", 1],
-        ["beta", 99],
-      ]),
-    });
-    expect(scoreLine(rec, ["alpha"], stats)).toBeGreaterThan(scoreLine(rec, ["beta"], stats));
-  });
+  // NOTE: the "rare term > common term" test is intentionally GONE — that
+  // behavior required the global corpus dictionary (the 13s-freeze bug,
+  // SPEC §3.3) and is permanently removed. All query terms now weight equally.
 
   it("is stem-aware: query 'deployment' scores a line with 'deploy'", () => {
     const rec = makeRecord("deploy the cluster");
-    const stats = makeStats({ docFreq: new Map([["deploy", 5]]) });
     // query term "deployment" -> groupWithStem -> ["deployment","deploy"]
     // line token "deploy" matches the stem form -> tf > 0 -> score > 0
-    expect(scoreLine(rec, ["deployment"], stats)).toBeGreaterThan(0);
+    expect(scoreLine(rec, ["deployment"], 10)).toBeGreaterThan(0);
+  });
+
+  it("scores multiple query-term hits higher than a single hit", () => {
+    const rec = makeRecord("docker compose port");
+    expect(scoreLine(rec, ["docker", "compose"], 10)).toBeGreaterThan(
+      scoreLine(rec, ["docker"], 10),
+    );
   });
 
   it("boosts a recent line above an old line (recency effect)", () => {
     const recent = makeRecord("docker bug", { ts: Date.now() });
     const old = makeRecord("docker bug", { ts: Date.now() - 365 * DAY_MS });
-    const stats = makeStats({ docFreq: new Map([["docker", 5]]) });
-    expect(scoreLine(recent, ["docker"], stats)).toBeGreaterThan(scoreLine(old, ["docker"], stats));
+    expect(scoreLine(recent, ["docker"], 10)).toBeGreaterThan(scoreLine(old, ["docker"], 10));
   });
 
   it("boosts a same-cwd line above a cross-cwd line", () => {
     const rec = makeRecord("docker bug");
-    const stats = makeStats({ docFreq: new Map([["docker", 5]]) });
-    const sameCwd = scoreLine(rec, ["docker"], stats, "/proj", "/proj");
-    const crossCwd = scoreLine(rec, ["docker"], stats, "/other", "/proj");
+    const sameCwd = scoreLine(rec, ["docker"], 10, "/proj", "/proj");
+    const crossCwd = scoreLine(rec, ["docker"], 10, "/other", "/proj");
     expect(sameCwd).toBeGreaterThan(crossCwd);
   });
 
-  it("regression: known deterministic score (ts=0, no cwd)", () => {
-    // ts=0 -> recency 1.0 ; no cwd -> boost 1.0 ; so score == pure BM25 sum.
+  it("regression: known deterministic score (ts=0, no cwd, avgLen=10)", () => {
+    // No IDF now — score == sum of tfSaturation across matched terms.
+    // lineLen for "docker compose port mapping" = 4 tokens.
+    // tf=1, avgLen=10: norm = 0.25 + 0.75*0.4 = 0.55 ; tf = 2.5 / 1.825 = 1.36986
     const rec = makeRecord("docker compose port mapping", { ts: 0 });
-    const stats = makeStats({
-      docFreq: new Map([
-        ["docker", 5],
-        ["compose", 8],
-      ]),
-    });
-    expect(scoreLine(rec, ["docker"], stats)).toBeCloseTo(3.986812, 4);
-    expect(scoreLine(rec, ["docker", "compose"], stats)).toBeCloseTo(7.377297, 4);
+    expect(scoreLine(rec, ["docker"], 10)).toBeCloseTo(1.369863, 4);
   });
 });
 
 describe("rankCandidates", () => {
-  it("sorts highest score first", () => {
-    const stats = makeStats({
-      docFreq: new Map([
-        ["docker", 5],
-        ["k3s", 1],
-      ]),
-    });
+  it("sorts highest score first (a line matching more terms ranks above one matching fewer)", () => {
     const candidates = [
-      { record: makeRecord("docker thing", { path: "/a.jsonl", line: 1 }) },
-      { record: makeRecord("k3s cluster", { path: "/b.jsonl", line: 1 }) }, // rare term
+      { record: makeRecord("just docker", { path: "/a.jsonl", line: 1 }) },
+      { record: makeRecord("docker and k3s together", { path: "/b.jsonl", line: 1 }) },
     ];
-    const ranked = rankCandidates(candidates, ["docker", "k3s"], stats);
-    // k3s is rarer -> higher IDF -> the k3s line should rank first
-    expect(ranked[0].record.text).toContain("k3s");
+    const ranked = rankCandidates(candidates, ["docker", "k3s"]);
+    // the line matching BOTH terms scores higher than one matching only one
+    expect(ranked[0].record.text).toContain("docker and k3s");
+  });
+
+  it("computes avgLen locally from the candidate set (no corpus scan)", () => {
+    // Just confirm it runs without any stats arg and returns scored results.
+    const candidates = [{ record: makeRecord("docker thing", { path: "/a.jsonl", line: 1 }) }];
+    const ranked = rankCandidates(candidates, ["docker"]);
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0].score).toBeGreaterThan(0);
   });
 
   it("dedups candidates with identical lineKeys", () => {
-    const stats = makeStats();
     const rec = makeRecord("docker thing", { path: "/a.jsonl", line: 1 });
     const candidates = [{ record: rec }, { record: rec }];
-    expect(rankCandidates(candidates, ["docker"], stats)).toHaveLength(1);
+    expect(rankCandidates(candidates, ["docker"])).toHaveLength(1);
   });
 });
 
@@ -174,7 +154,6 @@ describe("diversityCap", () => {
       { record: makeRecord("e", { path: "/f2.jsonl", line: 2 }) },
     ];
     const capped = diversityCap(items, 2);
-    // /f1 contributes first 2, /f2 contributes first 2; 3rd from f1 dropped
     expect(capped).toHaveLength(4);
     expect(capped.map((r) => r.record.text)).toEqual(["a", "b", "d", "e"]);
   });

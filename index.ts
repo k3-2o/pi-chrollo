@@ -14,7 +14,6 @@ import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { search } from "./src/search.js";
 import { read, READ_LIMIT_DEFAULT, READ_LIMIT_CAP } from "./src/read.js";
-import { invalidateCorpusCache } from "./src/corpus.js";
 
 export default function chrolloExtension(pi: ExtensionAPI): void {
   // The only session-scoped state: the current cwd, used as a same-project
@@ -30,7 +29,8 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async () => {
     sessionCwd = undefined;
-    invalidateCorpusCache();
+    // No cache to clear — the corpus-stats scan that needed invalidation is
+    // permanently gone (SPEC §3.3). search is stateless across calls.
   });
 
   // --- search_memory ---

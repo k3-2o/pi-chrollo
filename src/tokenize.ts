@@ -206,28 +206,13 @@ export function trigramRegex(term: string): string | null {
   return `(${uniq.join("|")})`;
 }
 
-// Pick the most distinctive query terms: lowercase, non-stopword, and rare in
-// the corpus (appears in < 30% of documents). Returns up to 5, least frequent
-// first. Falls back to the first 3 raw terms if nothing clears the rarity bar.
-export function extractDistinctiveTerms(
-  query: string,
-  corpusFreq: Map<string, number>,
-  totalDocs: number,
-): string[] {
-  const raw = tokenize(query).filter((w) => !STOP_WORDS.has(w));
-  if (raw.length === 0) return [];
-
-  const scored = raw.map((w) => ({
-    word: w,
-    freqRatio: totalDocs > 0 ? (corpusFreq.get(w) ?? 0) / totalDocs : 0,
-  }));
-  scored.sort((a, b) => a.freqRatio - b.freqRatio);
-
-  const filtered = scored
-    .filter((s) => s.freqRatio < 0.3)
-    .slice(0, 5)
-    .map((s) => s.word);
-
-  if (filtered.length === 0 && raw.length > 0) return raw.slice(0, 3);
-  return filtered;
+// Extract the query's content words: lowercase, non-stopword. The old version
+// filtered by corpus rarity (appearing in < 30% of docs) — that required the
+// global dictionary that caused the 13s freeze and is permanently gone (SPEC
+// §3.3). The user already chose which words matter by typing them; we just drop
+// stopwords and bound the pattern count for ripgrep.
+export function queryTerms(query: string): string[] {
+  return tokenize(query)
+    .filter((w) => !STOP_WORDS.has(w))
+    .slice(0, 8);
 }

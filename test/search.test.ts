@@ -11,7 +11,7 @@ import {
   type RgMatch,
   type RgRunner,
 } from "../src/search";
-import { invalidateCorpusCache, computeStats } from "../src/corpus";
+// (No corpus cache to invalidate — the stats scan is gone, SPEC §3.3.)
 
 // --- Fixture: a small Pi-format session tree ---
 
@@ -29,8 +29,7 @@ function makeTree(): string {
   return root;
 }
 
-beforeEach(() => invalidateCorpusCache());
-afterEach(() => invalidateCorpusCache());
+// (No corpus cache to clear between tests — the stats scan is gone, SPEC §3.3.)
 
 // --- parseRgJson (pure) ---
 
@@ -66,11 +65,10 @@ describe("parseRgJson", () => {
   });
 });
 
-// --- buildSearchResults (pure given matches + stats) ---
+// --- buildSearchResults (pure given matches) ---
 
-function statsFor(root: string) {
-  return computeStats([path.join(root, "projA", "s.jsonl")]);
-}
+// buildSearchResults no longer takes corpus stats (SPEC §3.3). It reads
+// per-file cwds lazily from the fixture files themselves.
 
 describe("buildSearchResults — structural filtering", () => {
   it("includes user + assistant message lines", () => {
@@ -79,7 +77,7 @@ describe("buildSearchResults — structural filtering", () => {
       { path: path.join(root, "projA", "s.jsonl"), line: 2, text: line(SESSION_DOCS, 2) },
       { path: path.join(root, "projA", "s.jsonl"), line: 3, text: line(SESSION_DOCS, 3) },
     ];
-    const out = buildSearchResults(matches, ["docker"], statsFor(root));
+    const out = buildSearchResults(matches, ["docker"]);
     expect(out.some((r) => r.includes("fix the docker compose"))).toBe(true);
     expect(out.some((r) => r.includes("configure the k3s"))).toBe(true);
   });
@@ -89,7 +87,7 @@ describe("buildSearchResults — structural filtering", () => {
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 4, text: line(SESSION_DOCS, 4) },
     ];
-    const out = buildSearchResults(matches, ["docker"], statsFor(root));
+    const out = buildSearchResults(matches, ["docker"]);
     expect(out).toHaveLength(0); // the only match was a toolResult -> dropped
   });
 
@@ -98,7 +96,7 @@ describe("buildSearchResults — structural filtering", () => {
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 5, text: line(SESSION_DOCS, 5) },
     ];
-    const out = buildSearchResults(matches, ["docker"], statsFor(root));
+    const out = buildSearchResults(matches, ["docker"]);
     expect(out).toHaveLength(0); // chrollo self-injection dropped
   });
 
@@ -107,7 +105,7 @@ describe("buildSearchResults — structural filtering", () => {
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 1, text: line(SESSION_DOCS, 1) },
     ];
-    expect(buildSearchResults(matches, ["docker"], statsFor(root))).toHaveLength(0);
+    expect(buildSearchResults(matches, ["docker"])).toHaveLength(0);
   });
 });
 
@@ -117,7 +115,7 @@ describe("buildSearchResults — ranking & formatting", () => {
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 2, text: line(SESSION_DOCS, 2) },
     ];
-    const out = buildSearchResults(matches, ["docker"], statsFor(root));
+    const out = buildSearchResults(matches, ["docker"]);
     expect(out[0]).toMatch(/projA.s.jsonl:2 \| user: fix the docker compose/);
   });
 
@@ -140,7 +138,7 @@ describe("buildSearchResults — ranking & formatting", () => {
       line: i + 1,
       text: line(fat, i + 1),
     }));
-    const out = buildSearchResults(matches, ["docker"], statsFor(root), undefined, {
+    const out = buildSearchResults(matches, ["docker"], undefined, {
       perFileCap: 3,
     });
     expect(out).toHaveLength(3); // capped at 3 from one file
