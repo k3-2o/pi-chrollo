@@ -71,55 +71,55 @@ describe("parseRgJson", () => {
 // per-file cwds lazily from the fixture files themselves.
 
 describe("buildSearchResults — structural filtering", () => {
-  it("includes user + assistant message lines", () => {
+  it("includes user + assistant message lines", async () => {
     const root = makeTree();
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 2, text: line(SESSION_DOCS, 2) },
       { path: path.join(root, "projA", "s.jsonl"), line: 3, text: line(SESSION_DOCS, 3) },
     ];
-    const out = buildSearchResults(matches, ["docker"]);
+    const out = await buildSearchResults(matches, ["docker"]);
     expect(out.some((r) => r.includes("fix the docker compose"))).toBe(true);
     expect(out.some((r) => r.includes("configure the k3s"))).toBe(true);
   });
 
-  it("excludes toolResult lines (tool outputs)", () => {
+  it("excludes toolResult lines (tool outputs)", async () => {
     const root = makeTree();
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 4, text: line(SESSION_DOCS, 4) },
     ];
-    const out = buildSearchResults(matches, ["docker"]);
+    const out = await buildSearchResults(matches, ["docker"]);
     expect(out).toHaveLength(0); // the only match was a toolResult -> dropped
   });
 
-  it("excludes custom_message lines (no self-pollution)", () => {
+  it("excludes custom_message lines (no self-pollution)", async () => {
     const root = makeTree();
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 5, text: line(SESSION_DOCS, 5) },
     ];
-    const out = buildSearchResults(matches, ["docker"]);
+    const out = await buildSearchResults(matches, ["docker"]);
     expect(out).toHaveLength(0); // chrollo self-injection dropped
   });
 
-  it("excludes the session header line", () => {
+  it("excludes the session header line", async () => {
     const root = makeTree();
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 1, text: line(SESSION_DOCS, 1) },
     ];
-    expect(buildSearchResults(matches, ["docker"])).toHaveLength(0);
+    expect(await buildSearchResults(matches, ["docker"])).toHaveLength(0);
   });
 });
 
 describe("buildSearchResults — ranking & formatting", () => {
-  it("returns `path:line | role: preview` formatted lines", () => {
+  it("returns `path:line | role: preview` formatted lines", async () => {
     const root = makeTree();
     const matches: RgMatch[] = [
       { path: path.join(root, "projA", "s.jsonl"), line: 2, text: line(SESSION_DOCS, 2) },
     ];
-    const out = buildSearchResults(matches, ["docker"]);
+    const out = await buildSearchResults(matches, ["docker"]);
     expect(out[0]).toMatch(/projA.s.jsonl:2 \| user: fix the docker compose/);
   });
 
-  it("respects the per-file diversity cap", () => {
+  it("respects the per-file diversity cap", async () => {
     const root = makeTree();
     // All 5 lines from one file — only 2 are message lines (lines 2, 3),
     // so with cap 3 we'd get 2. Build a fatter fixture to test the cap.
@@ -138,7 +138,7 @@ describe("buildSearchResults — ranking & formatting", () => {
       line: i + 1,
       text: line(fat, i + 1),
     }));
-    const out = buildSearchResults(matches, ["docker"], undefined, {
+    const out = await buildSearchResults(matches, ["docker"], undefined, {
       perFileCap: 3,
     });
     expect(out).toHaveLength(3); // capped at 3 from one file
@@ -200,6 +200,29 @@ describe("search — end-to-end (stubbed rg)", () => {
     const root = makeTree();
     const stub: RgRunner = async () => [];
     expect(await search("nonexistentterm", { root, runRg: stub })).toEqual([]);
+  });
+
+  it("excludes the current session file via excludePath", async () => {
+    const root = makeTree();
+    const target = path.join(root, "projA", "s.jsonl");
+    const stub: RgRunner = async () => [
+      { path: target, line: 2, text: line(SESSION_DOCS, 2) },
+      {
+        path: path.join(root, "other.jsonl"),
+        line: 1,
+        text:
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-07-01T10:00:00.000Z",
+            message: { role: "user", content: [{ type: "text", text: "docker hit" }] },
+          }) + "\n",
+      },
+    ];
+    // Without exclusion: both files match. With exclusion: only other.jsonl.
+    const withExclude = await search("docker", { root, runRg: stub, excludePath: target });
+    const withoutExclude = await search("docker", { root, runRg: stub });
+    expect(withoutExclude.length).toBeGreaterThan(withExclude.length);
+    expect(withExclude.every((r) => !r.includes("projA/s.jsonl"))).toBe(true);
   });
 });
 

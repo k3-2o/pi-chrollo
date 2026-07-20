@@ -22,9 +22,6 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     sessionCwd = ctx.cwd;
-    if (ctx.hasUI) {
-      ctx.ui.notify("Chrollo: retrieval layer ready (search_memory + read_memory)", "info");
-    }
   });
 
   pi.on("session_shutdown", async () => {
@@ -43,15 +40,20 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 
 Returns compact results: one line per match, formatted as \`<session-path>:<line> | <role>: <preview>\`. Each result is a MAP MARKER, not the full content — you must follow up with read_memory using the path and the line number as offset to see the surrounding context.
 
-Searches your entire Pi session history (~/.pi/agent/sessions). Use distinctive keywords. Structural filtering drops tool outputs and metadata automatically — only real conversation turns are returned, ranked by BM25 relevance × recency.
+Searches your entire Pi session history (~/.pi/agent/sessions). Terms are OR-matched by ripgrep and BM25-ranked: \`docker compose port\` matches any line containing docker, compose, OR port — so FEWER, RARER terms beat many common ones. Structural filtering drops tool outputs and metadata automatically — only real conversation turns are returned.
+
+Query hygiene: prefer 2–4 distinctive keywords (proper nouns, identifiers, rare terms). \`chrollo slander\` beats \`the chrollo slander session we had\` — the extra words widen the net without improving rank.
 
 Examples:
   "chrollo slander"          — find the session where we discussed chrollo's flaws
   "docker compose port"      — find past docker-compose debugging
   "k3s ingress traefik"      — find k3s cluster work`,
-    promptSnippet: "Search past Pi sessions for relevant context (returns path:line markers)",
+    promptSnippet:
+      "Search past Pi sessions for relevant context (returns path:line markers; follow up with read_memory)",
     promptGuidelines: [
-      "Use search_memory when the user references past work, past conversations, or prior sessions — e.g. 'remember when', 'we discussed', 'that session about', 'go back to'.",
+      "Use search_memory FIRST whenever the user references past work or prior sessions ('remember when', 'we discussed', 'that session about', 'go back to'), AND whenever you resume a project or topic that may have history — even if the user doesn't explicitly ask. Checking memory before re-exploring code or re-asking questions saves redundant work.",
+      "Use 2–4 distinctive keywords (proper nouns, identifiers, rare terms like 'k3s' or 'chrollo'). Terms are OR-matched: adding common words (the, about, thing, session) only widens the net, never narrows it.",
+      "Every result is a marker (\`path:line | preview\`), not the content. Always follow up with read_memory using the marker's line number as offset to actually read the context.",
     ],
     parameters: Type.Object({
       query: Type.String({
@@ -59,9 +61,13 @@ Examples:
           "Distinctive keywords from the topic you're looking for. All terms are OR-matched by ripgrep; results are BM25-ranked. E.g. 'docker compose port', 'chrollo slander', 'BM25 scorer'.",
       }),
     }),
-    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("search_memory: aborted");
-      const results = await search(params.query, { sessionCwd });
+      // Exclude the current session's own file — the agent already has that
+      // context live in its context window; surfacing it as a top match just
+      // crowds out older, actually-useful sessions.
+      const excludePath = ctx.sessionManager.getSessionFile();
+      const results = await search(params.query, { sessionCwd, excludePath });
       if (signal?.aborted) throw new Error("search_memory: aborted");
 
       if (results.length === 0) {
@@ -117,8 +123,9 @@ Parameters:
   limit  — optional, default ${READ_LIMIT_DEFAULT}, max ${READ_LIMIT_CAP}`,
     promptSnippet: "Read a bounded window of a past session (offset required)",
     promptGuidelines: [
-      "Use read_memory after search_memory to read the context around a marker — pass the marker's line number as offset.",
+      "Use read_memory after every search_memory to read the context around a marker — pass the marker's line number as offset.",
       "Never guess a path or offset for read_memory — always obtain them from a prior search_memory result.",
+      "The one-line preview from search_memory rarely contains enough to act on. Reading the surrounding window is almost always worth the call.",
     ],
     parameters: Type.Object({
       path: Type.String({

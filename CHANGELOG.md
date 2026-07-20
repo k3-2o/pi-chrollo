@@ -2,6 +2,63 @@
 
 All notable changes to Chrollo are documented here.
 
+## [0.3.1] — 2026-07
+
+**Polish pass on the retrieval layer.** No architecture change — same
+read-only, two-tool design as 0.3.0. This release closes the residual UX
+and recall-quality gaps surfaced by dogfooding `search_memory` in real
+sessions.
+
+### Fixed
+
+- **TUI stutter on common-term searches** — `buildSearchResults` was
+  synchronous, so a search returning thousands of ripgrep hits blocked
+  the event loop for the full parse/rank pass (~1s) and the input box /
+  message bubble stuttered. The parse loop now `await`s a `setImmediate`
+  yield every 200 matches (`PARSE_CHUNK`), letting the render thread
+  paint between batches. The 0.3.0 post-mortem flagged this as the
+  residual lag left after the 13s corpus scan was removed; it is now
+  actually applied.
+- **Startup banner** — the `session_start` `ui.notify(`"`Chrollo: retrieval
+  layer ready (search_memory + read_memory)`"`)` popup is removed. It fired
+  on every launch and stated a readiness the tool had not earned.
+
+### Changed
+
+- **`RG_MAX_COUNT_PER_FILE`: 20 → 5.** Diversity capping keeps at most
+  3 results per file, so 20 rg hits per file was pure waste — parsed and
+  scored only to be discarded. 5 gives 2 spares for intra-file ranking.
+  Measured **2–3× faster** steady-state search (1.5–2.3s → 0.4–1.4s over
+  the live 267-session corpus) with no recall loss.
+- **Strengthened tool prompts.** Both tools now carry 3 `promptGuidelines`
+  instead of 1–2. `search_memory` teaches the model to (a) reach for it
+  *first* on any project resume or past-work reference, not just explicit
+  "remember when" prompts; (b) use 2–4 distinctive terms — terms are
+  OR-matched, so common words only widen the net. `read_memory` teaches
+  that the one-line preview is rarely enough and the window read is
+  almost always worth the call. The OR-semantics note moved into the
+  `description` so the model stops assuming AND.
+
+### Added
+
+- **Current-session exclusion.** `search_memory` now passes
+  `excludePath = ctx.sessionManager.getSessionFile()` so the agent's own
+  live session file is dropped from results. Without this, every search
+  returned the current session as the top hit (max recency + all query
+  terms present), crowding out older, actually-useful sessions. The agent
+  already has that context in its window.
+
+### Removed
+
+- **Stale install `test/` directory.** The live install at
+  `~/.pi/agent/extensions/chrollo/test/` still held 13 old-architecture
+  test files (`capture.test.ts`, `idf.test.ts`, `inject.test.ts`,
+  `metrics.test.ts`, `corpus-cache.test.ts`, `storage.test.ts`, …) that
+  referenced modules deleted in 0.3.0. Replaced with the current 9-file
+  suite so the install is self-consistent.
+
+---
+
 ## [0.3.0] — 2026-07
 
 **Architecture pivot.** Chrollo is no longer a capture-and-inject memory

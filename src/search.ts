@@ -22,9 +22,20 @@ export const PER_FILE_CAP = 3;
 const RG_TIMEOUT_MS = 5000;
 // rg stdout can be large (a common term like 'chrollo' yields ~29MB / 6k matches).
 // Two defenses: a generous buffer, and --max-count per file so one fat session
-// cant flood us. We only ever rank the top MAX_RESULTS anyway.
+// can't flood us. Capped at 5/file: diversity keeps at most 3/file anyway, so 5
+// gives 2 spares for intra-file ranking without parsing thousands of lines.
 const RG_MAX_BUFFER = 100 * 1024 * 1024;
-const RG_MAX_COUNT_PER_FILE = 20;
+const RG_MAX_COUNT_PER_FILE = 5;
+
+// Yield to the event loop every N parsed matches so the TUI render thread can
+// paint between batches. Without this, a common-term search (thousands of rg
+// hits) blocks the event loop for the full parse/rank pass and the input box
+// stutters — the residual TUI lag left after the 13s corpus scan was removed.
+const PARSE_CHUNK = 200;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 // One rg match event, normalized. search() converts these into candidates.
 export interface RgMatch {
@@ -79,19 +90,23 @@ export function parseRgJson(stdout: string): RgMatch[] {
   return out;
 }
 
-// Convert rg matches into ranked, formatted search results. Pure given
-// sessionCwd + the matches. The structural filter (drop non-message lines and
-// tool outputs) happens here via parseLine. cwds are read lazily, one per
-// unique matched file (cheap, never blocks on a corpus scan).
-export function buildSearchResults(
+// Convert rg matches into ranked, formatted search results. Deterministic in
+// output but async: the parse loop yields to the event loop every PARSE_CHUNK
+// matches so a fat common-term search doesn't block the TUI render thread.
+// The structural filter (drop non-message lines and tool outputs) happens
+// here via parseLine. cwds are read lazily, one per unique matched file
+// (cheap, never blocks on a corpus scan).
+export async function buildSearchResults(
   matches: RgMatch[],
   terms: string[],
   sessionCwd?: string,
   opts: { maxResults?: number; perFileCap?: number } = {},
-): string[] {
+): Promise<string[]> {
   const cwdCache = new Map<string, string | undefined>();
   const candidates: { record: MessageRecord; lineCwd?: string }[] = [];
-  for (const m of matches) {
+  for (let i = 0; i < matches.length; i++) {
+    if (i > 0 && i % PARSE_CHUNK === 0) await yieldToEventLoop();
+    const m = matches[i];
     const rec = parseLine(m.path, m.line, m.text);
     if (rec === null || rec.kind !== "message") continue; // structural filter
     if (rec.text.length === 0) continue; // nothing to show
@@ -114,6 +129,7 @@ export async function search(
   opts: {
     root?: string;
     sessionCwd?: string;
+    excludePath?: string;
     runRg?: RgRunner; // injectable for tests
   } = {},
 ): Promise<string[]> {
@@ -128,9 +144,9 @@ export async function search(
   // Expand each term into [term, stem] and flatten — rg ORs them, then a line
   // only scores if it actually contains the term or its stem (scoreLine).
   const patterns = terms.flatMap(groupWithStem);
-  const matches = await runRg(patterns, root);
+  const matches = (await runRg(patterns, root)).filter((m) => m.path !== opts.excludePath);
 
-  let results = buildSearchResults(matches, terms, opts.sessionCwd);
+  let results = await buildSearchResults(matches, terms, opts.sessionCwd);
   if (results.length > 0) return results;
 
   // Zero results — trigram typo fallback (one retry, OR of all trigram regexes).
@@ -139,8 +155,10 @@ export async function search(
   // Trigram fallback uses regex, not -F. Inject a regex-aware runner if needed;
   // the default runRipgrep uses -F which would mis-interpret regex chars, so
   // for the fallback we call rg directly with regex mode.
-  const fallbackMatches = await runRgRegex(trigramPatterns, root, opts.runRg ?? null);
-  return buildSearchResults(fallbackMatches, terms, opts.sessionCwd);
+  const fallbackMatches = (await runRgRegex(trigramPatterns, root, opts.runRg ?? null)).filter(
+    (m) => m.path !== opts.excludePath,
+  );
+  return await buildSearchResults(fallbackMatches, terms, opts.sessionCwd);
 }
 
 // Trigram fallback needs regex matching (-F off). If the caller injected a
