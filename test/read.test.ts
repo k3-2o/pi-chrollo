@@ -116,6 +116,26 @@ describe("read — validation", () => {
     fs.unlinkSync(outside);
   });
 
+  it("rejects a symlink that points outside the session root", () => {
+    const outsideRoot = path.join(os.tmpdir(), `chrollo-outside-${Date.now()}`);
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    const outside = path.join(outsideRoot, "secret.jsonl");
+    fs.writeFileSync(
+      outside,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-07-01T10:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "spoofed" }] },
+      }) + "\n",
+    );
+    const link = path.join(tmpRoot, "link.jsonl");
+    fs.symlinkSync(outside, link);
+    const r = read(link, 1, 10, tmpRoot);
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.error).toMatch(/outside the session store/);
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  });
+
   it("rejects a nonexistent file", () => {
     const r = read(path.join(tmpRoot, "nope.jsonl"), 1, 10, tmpRoot);
     expect("error" in r).toBe(true);

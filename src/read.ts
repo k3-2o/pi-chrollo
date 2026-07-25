@@ -13,11 +13,21 @@ export const READ_LIMIT_CAP = 50;
 
 // Check whether a path lives under the session root. Read rejects anything
 // outside it — the agent can't be tricked into reading arbitrary files.
+// Symlinks are resolved first so a symlink inside the root that points outside
+// is caught before the file is opened.
 function isSessionPath(target: string, root: string): boolean {
-  const resolved = path.resolve(target);
-  const resolvedRoot = path.resolve(root);
+  const resolved = safeRealpath(target);
+  const resolvedRoot = safeRealpath(root);
   const rel = path.relative(resolvedRoot, resolved);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function safeRealpath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
 }
 
 export interface ReadResult {
