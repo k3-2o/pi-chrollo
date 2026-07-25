@@ -16,6 +16,7 @@ dist/
 .DS_Store
 *.log
 .vscode/
+AUDIT-FINDINGS.md
 
 # --- npm internals (excluded by default; listed for clarity) ---
 .git/
