@@ -5,9 +5,6 @@ import {
   scoreLine,
   rankCandidates,
   diversityCap,
-  dedupKey,
-  filterInjected,
-  recordInjected,
   filePathOf,
 } from "../src/rank";
 import type { MessageRecord } from "../src/normalize";
@@ -161,35 +158,6 @@ describe("diversityCap", () => {
   it("returns all when maxPerFile >= count", () => {
     const items = [{ record: makeRecord("a", { path: "/f.jsonl", line: 1 }) }];
     expect(diversityCap(items, 3)).toHaveLength(1);
-  });
-});
-
-describe("dedup utilities", () => {
-  it("dedupKey returns the lineKey", () => {
-    const rec = makeRecord("x", { path: "/f.jsonl", line: 7 });
-    expect(dedupKey(rec)).toBe("/f.jsonl:7");
-  });
-
-  it("filterInjected drops already-injected keys", () => {
-    const injected = new Set<string>(["/f.jsonl:1"]);
-    const items = [
-      { record: makeRecord("a", { path: "/f.jsonl", line: 1 }) },
-      { record: makeRecord("b", { path: "/f.jsonl", line: 2 }) },
-    ];
-    const fresh = filterInjected(items, injected);
-    expect(fresh).toHaveLength(1);
-    expect(fresh[0].record.lineKey).toBe("/f.jsonl:2");
-  });
-
-  it("recordInjected adds keys to the set", () => {
-    const injected = new Set<string>();
-    const items = [
-      { record: makeRecord("a", { path: "/f.jsonl", line: 1 }) },
-      { record: makeRecord("b", { path: "/f.jsonl", line: 2 }) },
-    ];
-    recordInjected(items, injected);
-    expect(injected.has("/f.jsonl:1")).toBe(true);
-    expect(injected.has("/f.jsonl:2")).toBe(true);
   });
 });
 

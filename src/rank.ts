@@ -1,8 +1,6 @@
 // Chrollo rank — scoring orchestration. Combines term relevance (TF-saturation
 // with length normalization), recency (freshness), and a same-project cwd
-// boost. Also hosts the dedup utilities ported fresh from the old inject.ts
-// (the auto-injection gating half is gone; only the line-key dedup trio
-// survives).
+// boost.
 //
 // NO global corpus stats — the IDF/rare-term component was the 13s-freeze bug
 // (SPEC §3.3) and is permanently dropped. avgLen is computed locally from the
@@ -122,26 +120,4 @@ export function diversityCap<T extends { record: MessageRecord }>(
     out.push(r);
   }
   return out;
-}
-
-// --- Dedup utilities (ported fresh from the old inject.ts) ---
-// Keyed on lineKey, which is already "path:line". Useful for session-scoped
-// suppression of already-shown results (search.ts may opt in).
-
-export function dedupKey(record: MessageRecord): string {
-  return record.lineKey;
-}
-
-export function filterInjected<T extends { record: MessageRecord }>(
-  items: T[],
-  injected: Set<string>,
-): T[] {
-  return items.filter((r) => !injected.has(r.record.lineKey));
-}
-
-export function recordInjected<T extends { record: MessageRecord }>(
-  items: T[],
-  injected: Set<string>,
-): void {
-  for (const r of items) injected.add(r.record.lineKey);
 }
