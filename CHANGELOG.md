@@ -2,6 +2,33 @@
 
 All notable changes to Chrollo are documented here.
 
+## [0.3.2] — 2026-07
+
+**Adversarial-audit remediation.** Security hardening and dead-code
+cleanup on the 0.3.1 retrieval layer.
+
+### Fixed
+
+- **Path traversal / containment bypass via symlink in `read_memory`** —
+  `isSessionPath` validated paths with `path.resolve`, which normalizes
+  `.`/`..` but does **not** resolve symbolic links. Because
+  `fs.readFileSync` follows symlinks, a path under the session root that
+  was a symlink to a file outside the root passed validation and could
+  be rendered as a session memory. The containment check now resolves
+  both the target path and the session root with `fs.realpathSync`
+  (falling back to `path.resolve` when realpath fails) before comparing
+  them. A regression test guards the symlink case.
+
+### Removed
+
+- **Dead dedup utilities in `rank.ts`** — `dedupKey`, `filterInjected`,
+  and `recordInjected` were ported from the old auto-injection
+  architecture but were never wired into the 0.3.0 read-only pipeline.
+  They were only exercised by tests. Deleted from `src/rank.ts` along
+  with their dedicated test block.
+
+---
+
 ## [0.3.1] — 2026-07
 
 **Polish pass on the retrieval layer.** No architecture change — same
