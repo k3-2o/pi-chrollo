@@ -12,7 +12,7 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
-import { search } from "./src/search.js";
+import { search, SearchInterruptedError } from "./src/search.js";
 import { read, READ_LIMIT_DEFAULT, READ_LIMIT_CAP } from "./src/read.js";
 
 export default function chrolloExtension(pi: ExtensionAPI): void {
@@ -67,24 +67,45 @@ Examples:
       // context live in its context window; surfacing it as a top match just
       // crowds out older, actually-useful sessions.
       const excludePath = ctx.sessionManager.getSessionFile();
-      const results = await search(params.query, { sessionCwd, excludePath });
-      if (signal?.aborted) throw new Error("search_memory: aborted");
+      try {
+        // signal is wired into the rg child (execFile signal option): Esc kills it.
+        const results = await search(params.query, { sessionCwd, excludePath, signal });
+        if (signal?.aborted) throw new Error("search_memory: aborted");
 
-      if (results.length === 0) {
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `No memories found matching: "${params.query}"` }],
+            details: { totalMatches: 0 },
+          };
+        }
+
+        const text =
+          results.join("\n") +
+          `\n\nEach line is a marker. Call read_memory with the path and the line number (offset) to see the surrounding context.`;
+
         return {
-          content: [{ type: "text", text: `No memories found matching: "${params.query}"` }],
-          details: { totalMatches: 0 },
+          content: [{ type: "text", text }],
+          details: { totalMatches: results.length },
         };
+      } catch (err) {
+        if (signal?.aborted) throw new Error("search_memory: aborted");
+        // Killed-but-empty is a slow-disk hiccup, never "no memories".
+        if (
+          err instanceof SearchInterruptedError ||
+          (err as Error)?.name === "SearchInterruptedError"
+        ) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Search timed out — ripgrep hit the 30s backstop while scanning a cold or slow disk and had not produced any results when it was stopped. This is a startup hiccup, not an empty store. The session corpus is now partly cached, so retrying this search usually succeeds; if it keeps timing out, try narrower keywords.`,
+              },
+            ],
+            details: { error: "search_timeout" },
+          };
+        }
+        throw err;
       }
-
-      const text =
-        results.join("\n") +
-        `\n\nEach line is a marker. Call read_memory with the path and the line number (offset) to see the surrounding context.`;
-
-      return {
-        content: [{ type: "text", text }],
-        details: { totalMatches: results.length },
-      };
     },
     renderCall(args: { query?: string }, theme: Theme): Text {
       const q = typeof args.query === "string" ? args.query : "";

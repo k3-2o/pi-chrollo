@@ -2,6 +2,31 @@
 
 All notable changes to Chrollo are documented here.
 
+## [0.3.3] — 2026-08
+
+**Cold-start fix.** First-time searches after a PC boot used to return
+"No memories found" for queries that obviously existed: ripgrep needed ~8s+ to
+scan the ~200MB session store from a cold spinning disk, and the `RG_TIMEOUT_MS
+= 5000` kill switch SIGTERM'd it mid-scan — the `catch` then reported the kill
+as a genuine no-match. Repeated attempts slowly warmed the OS page cache,
+making it look like chrollo needed 3–5 tries to "wake up".
+
+### Fixed
+
+- **A timeout is never reported as a miss.** The search_memory tool now wires
+  its abort signal into the rg child (`execFile` `signal` option), so Esc/
+  cancel genuinely kills the scan immediately — no orphaned rg grinding the
+  disk in the background. The timeout is demoted to a 30s pure backstop (was
+  5s) that only fires on a genuinely stalled/huge scan, never on a legitimate
+  cold-disk scan. When the backstop does fire, its partial stdout is salvaged
+  (`rgCatch`) and returned as real first-attempt results; only if nothing was
+  ready does the tool say "search timed out — retry" instead of the misleading
+  "No memories found". Same treatment applied to the trigram typo fallback, which
+  had the identical 5s kill switch.
+- **A cancelled search is a cancellation, not an error.** Abort during a scan
+  returns cleanly (the tool reports `aborted`); it can no longer be mistaken
+  for a timeout or a miss.
+
 ## [0.3.2] — 2026-07
 
 **Adversarial-audit remediation.** Security hardening and dead-code

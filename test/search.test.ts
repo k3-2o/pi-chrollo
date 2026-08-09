@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -6,6 +6,9 @@ import {
   search,
   buildSearchResults,
   parseRgJson,
+  rgCatch,
+  SearchInterruptedError,
+  runRipgrep,
   MAX_RESULTS,
   PER_FILE_CAP,
   type RgMatch,
@@ -223,6 +226,121 @@ describe("search — end-to-end (stubbed rg)", () => {
     const withoutExclude = await search("docker", { root, runRg: stub });
     expect(withoutExclude.length).toBeGreaterThan(withExclude.length);
     expect(withExclude.every((r) => !r.includes("projA/s.jsonl"))).toBe(true);
+  });
+});
+
+// --- rgCatch: classification of a rejected rg run (the cold-start fix) ---
+
+// A killed rg streams partially-valid match JSON; the tail line is truncated.
+const matchJson = JSON.stringify({
+  type: "match",
+  data: { path: { text: "/p/s.jsonl" }, line_number: 2, lines: { text: "docker hit\n" } },
+});
+const truncatedTail = `{"type":"match","data":{"path":{"te`; // mid-line kill
+
+// Note: these tests mock node:child_process.execFile ONLY for the runRipgrep
+// block at the bottom; the rest of the suite injects `runRg` stubs and never
+// touches a real or mocked child process.
+vi.mock("node:child_process", () => ({ execFile: vi.fn() }));
+import { execFile } from "node:child_process";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("rgCatch — timeout / abort / no-match classification", () => {
+  it("salvages completed matches from a timed-out run, skipping the truncated tail", () => {
+    const err = {
+      killed: true,
+      signal: "SIGTERM",
+      stdout: `${matchJson}\n${truncatedTail}`,
+    };
+    expect(rgCatch(err)).toEqual([{ path: "/p/s.jsonl", line: 2, text: "docker hit" }]);
+  });
+
+  it("throws SearchInterruptedError when a timed-out run produced nothing salvageable", () => {
+    expect(() => rgCatch({ killed: true, signal: "SIGTERM", stdout: "" })).toThrow(
+      SearchInterruptedError,
+    );
+  });
+
+  it("returns [] on user abort (signal) — cancellation, never a fake timeout", () => {
+    const ac = new AbortController();
+    ac.abort();
+    expect(rgCatch({ killed: true, signal: "SIGTERM", stdout: "" }, ac.signal)).toEqual([]);
+    expect(() => rgCatch({ killed: true, signal: "SIGTERM", stdout: "" }, ac.signal)).not.toThrow();
+  });
+
+  it("returns [] on genuine no-match (rg exit 1) and non-kill errors", () => {
+    expect(rgCatch({ code: 1 })).toEqual([]);
+    expect(rgCatch(new Error("boom"))).toEqual([]);
+    expect(rgCatch(undefined)).toEqual([]);
+  });
+});
+
+describe("search — signal threading & interruption propagation", () => {
+  it("passes the abort signal through to the rg runner", async () => {
+    const root = makeTree();
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const stub: RgRunner = async (_p, _r, signal) => {
+      seen = signal;
+      return [];
+    };
+    await search("docker", { root, runRg: stub, signal: ac.signal });
+    expect(seen).toBe(ac.signal);
+  });
+
+  it("propagates SearchInterruptedError so the tool reports a timeout, not 'no memories'", async () => {
+    const root = makeTree();
+    const stub: RgRunner = async () => {
+      throw new SearchInterruptedError(30000);
+    };
+    await expect(search("docker", { root, runRg: stub })).rejects.toThrow(SearchInterruptedError);
+  });
+});
+
+describe("runRipgrep — end-to-end via mocked execFile", () => {
+  // promisify(execFile) invokes the callback form: (file, args, opts, cb).
+  // Mocking with mockResolvedValue hung under bun (promisify didn't adopt the
+  // returned promise), so these call the callback directly — the same shape
+  // the real promisified call passes.
+  function mockCall(err: unknown, res?: { stdout?: string }): ReturnType<typeof vi.fn> {
+    const fn = execFile as ReturnType<typeof vi.fn>;
+    fn.mockImplementation((_file, _args, _opts, cb) => {
+      cb(err, res ?? { stdout: "" });
+      return undefined;
+    });
+    return fn;
+  }
+
+  it("salvages partial rg output when killed by the timeout backstop", async () => {
+    mockCall({ killed: true, signal: "SIGTERM", stdout: `${matchJson}\n${truncatedTail}` });
+    const matches = await runRipgrep(["docker"], "/tmp/root");
+    expect(matches).toEqual([{ path: "/p/s.jsonl", line: 2, text: "docker hit" }]);
+  });
+
+  it("raises SearchInterruptedError when a killed run had streamed nothing", async () => {
+    mockCall({ killed: true, signal: "SIGTERM", stdout: "" });
+    await expect(runRipgrep(["docker"], "/tmp/root")).rejects.toThrow(SearchInterruptedError);
+  });
+
+  it("returns [] on abort without raising (cancellation is not an error)", async () => {
+    mockCall({ name: "AbortError" });
+    const ac = new AbortController();
+    ac.abort();
+    const matches = await runRipgrep(["docker"], "/tmp/root", ac.signal);
+    expect(matches).toEqual([]);
+  });
+
+  it("passes the abort signal and timeout options to execFile", async () => {
+    const fn = mockCall(null, { stdout: "" });
+    const ac = new AbortController();
+    await runRipgrep(["docker"], "/tmp/root", ac.signal);
+    const [, , opts] = fn.mock.calls[0];
+    expect(opts.signal).toBe(ac.signal);
+    expect(opts.timeout).toBe(30000);
+    expect(opts.maxBuffer).toBe(100 * 1024 * 1024);
   });
 });
 

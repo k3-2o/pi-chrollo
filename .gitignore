@@ -4,3 +4,6 @@ dist/
 *.log
 .vscode/
 AUDIT-FINDINGS.md
+# Stray tooling artifacts
+.aider.*
+--mcp-servers*/
