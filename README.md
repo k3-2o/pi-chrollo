@@ -53,11 +53,12 @@ Tool outputs and internal reasoning are filtered out automatically — only real
 
 Chrollo keeps it boring on purpose.
 
-- **One ripgrep call.** `rg --json --sortr modified -m 5 -F -e <term> -i` searches the corpus **and** orders sessions by recency (file mtime) in a single pass — no BM25, no stemming, no typo fallback, no global stats scan.
-- **Filter, then cap.** Each matched JSONL line is structurally filtered (drops tool outputs, thinking, metadata), capped at a few per session, and sliced to 15 markers.
-- **Honest failure.** A real timeout says "timed out — retry", never a fake "no memories". Esc genuinely cancels the scan.
+- **One ripgrep call.** `rg --json --sortr modified -m 200 -F -e <term> -i` searches the corpus **and** orders sessions by recency (file mtime) in a single pass.
+- **Rank by coverage, not just recency.** A line mentioning **more of your distinct keywords** ranks above a more recent line matching only one — so a distinctive old conversation surfaces over recent topical chit-chat. Ties fall back to recency order. No BM25, no stemming, no typo fallback, no global stats scan.
+- **Filter, then cap.** Each matched line is structurally filtered (tool outputs, thinking, metadata dropped); the `-m 200` per-file cap keeps a mid-file answer reachable before ranking, then a per-file diversity cap + `MAX_RESULTS=15`.
+- **Honest failure.** A real timeout says "timed out — retry", never a fake "no memories". Esc genuinely cancels.
 
-We give up per-line recency (mtime per file instead) and typo tolerance for ~4 source files that are easy to read.
+Working limit: an **undistinguished** keyword (one that also appears across many recent sessions) can't guarantee the "right" old session — that's inherent to keyword retrieval. The overlay pays off when the query has at least one term distinct to the target.
 
 ## License
 

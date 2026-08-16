@@ -77,26 +77,29 @@ describe("buildSearchResults — structural filtering", () => {
   const p = path.join(root, "projA", "s.jsonl");
 
   it("includes user + assistant message lines", async () => {
-    const out = await buildSearchResults([
-      { path: p, line: 2, text: line(SESSION_DOCS, 2) },
-      { path: p, line: 3, text: line(SESSION_DOCS, 3) },
-    ]);
+    const out = await buildSearchResults(
+      [
+        { path: p, line: 2, text: line(SESSION_DOCS, 2) },
+        { path: p, line: 3, text: line(SESSION_DOCS, 3) },
+      ],
+      [],
+    );
     expect(out.some((r) => r.includes("fix the docker compose"))).toBe(true);
     expect(out.some((r) => r.includes("configure the k3s"))).toBe(true);
   });
 
   it("excludes toolResult lines (tool outputs)", async () => {
-    const out = await buildSearchResults([{ path: p, line: 4, text: line(SESSION_DOCS, 4) }]);
+    const out = await buildSearchResults([{ path: p, line: 4, text: line(SESSION_DOCS, 4) }], []);
     expect(out).toHaveLength(0);
   });
 
   it("excludes custom_message lines (no self-pollution)", async () => {
-    const out = await buildSearchResults([{ path: p, line: 5, text: line(SESSION_DOCS, 5) }]);
+    const out = await buildSearchResults([{ path: p, line: 5, text: line(SESSION_DOCS, 5) }], []);
     expect(out).toHaveLength(0);
   });
 
   it("excludes the session header line", async () => {
-    const out = await buildSearchResults([{ path: p, line: 1, text: line(SESSION_DOCS, 1) }]);
+    const out = await buildSearchResults([{ path: p, line: 1, text: line(SESSION_DOCS, 1) }], []);
     expect(out).toHaveLength(0);
   });
 });
@@ -106,7 +109,7 @@ describe("buildSearchResults — formatting & caps", () => {
   const p = path.join(root, "projA", "s.jsonl");
 
   it("returns `path:line | role: preview` formatted lines", async () => {
-    const out = await buildSearchResults([{ path: p, line: 2, text: line(SESSION_DOCS, 2) }]);
+    const out = await buildSearchResults([{ path: p, line: 2, text: line(SESSION_DOCS, 2) }], []);
     expect(out[0]).toMatch(/projA[\\/]s\.jsonl:2 \| user: fix the docker compose/);
   });
 
@@ -126,8 +129,42 @@ describe("buildSearchResults — formatting & caps", () => {
       line: i + 1,
       text: line(fat, i + 1),
     }));
-    const out = await buildSearchResults(matches);
+    const out = await buildSearchResults(matches, []);
     expect(out).toHaveLength(PER_FILE_CAP); // 3 from one file, capped
+  });
+});
+
+describe("buildSearchResults — term-overlap ranking (old file beats recent fluff)", () => {
+  function msg(p: string, lineNo: number, text: string): RgMatch {
+    return {
+      path: p,
+      line: lineNo,
+      text:
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: [{ type: "text", text }] },
+        }) + "\n",
+    };
+  }
+
+  it("ranks a line with all query terms above recent fluff lines", async () => {
+    const old = msg("/data/old.jsonl", 2, "the k3s ingress and upstream timeout config");
+    const recentA = msg("/data/recentK.jsonl", 2, "only k3s here nothing else");
+    const recentB = msg("/data/recentI.jsonl", 2, "traefik ingress route only");
+    const recentC = msg("/data/recentT.jsonl", 2, "a timeout value and unrelated");
+    // rg order = recency: recent files first, old last.
+    const out = await buildSearchResults(
+      [recentA, recentB, recentC, old],
+      ["k3s", "ingress", "timeout"],
+    );
+    expect(out[0]).toContain("old.jsonl:2");
+  });
+
+  it("keeps recency order for equal-overlap matches (tiebreak)", async () => {
+    const a = msg("/data/recentFirst.jsonl", 2, "k3s and 1200 only");
+    const b = msg("/data/olderSecond.jsonl", 2, "k3s and a timeout thing");
+    const out = await buildSearchResults([a, b], ["k3s", "1200", "ingress"]);
+    expect(out[0]).toContain("recentFirst");
   });
 });
 
