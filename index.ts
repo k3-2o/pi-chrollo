@@ -12,23 +12,12 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
-import { search, SearchInterruptedError } from "./src/search.js";
+import { search } from "./src/search.js";
 import { read, READ_LIMIT_DEFAULT, READ_LIMIT_CAP } from "./src/read.js";
 
 export default function chrolloExtension(pi: ExtensionAPI): void {
-  // The only session-scoped state: the current cwd, used as a same-project
-  // boost signal for ranking. No capture, no injection, no metrics.
-  let sessionCwd: string | undefined;
-
-  pi.on("session_start", async (_event, ctx) => {
-    sessionCwd = ctx.cwd;
-  });
-
-  pi.on("session_shutdown", async () => {
-    sessionCwd = undefined;
-    // No cache to clear — the corpus-stats scan that needed invalidation is
-    // permanently gone (SPEC §3.3). search is stateless across calls.
-  });
+  // No session-scoped state. search is stateless across calls; there is no
+  // capture, no injection, no cache, and no cwd boost.
 
   // --- search_memory ---
   // Returns path:line | role: preview markers. The agent picks one and feeds
@@ -69,7 +58,7 @@ Examples:
       const excludePath = ctx.sessionManager.getSessionFile();
       try {
         // signal is wired into the rg child (execFile signal option): Esc kills it.
-        const results = await search(params.query, { sessionCwd, excludePath, signal });
+        const results = await search(params.query, { excludePath, signal });
         if (signal?.aborted) throw new Error("search_memory: aborted");
 
         if (results.length === 0) {
@@ -90,15 +79,12 @@ Examples:
       } catch (err) {
         if (signal?.aborted) throw new Error("search_memory: aborted");
         // Killed-but-empty is a slow-disk hiccup, never "no memories".
-        if (
-          err instanceof SearchInterruptedError ||
-          (err as Error)?.name === "SearchInterruptedError"
-        ) {
+        if ((err as Error)?.message === "search timed out") {
           return {
             content: [
               {
                 type: "text",
-                text: `Search timed out — ripgrep hit the 30s backstop while scanning a cold or slow disk and had not produced any results when it was stopped. This is a startup hiccup, not an empty store. The session corpus is now partly cached, so retrying this search usually succeeds; if it keeps timing out, try narrower keywords.`,
+                text: `Search timed out — ripgrep exceeded the backstop while scanning a cold or slow disk and produced no results yet. This is a startup hiccup, not an empty store; retry the search.`,
               },
             ],
             details: { error: "search_timeout" },

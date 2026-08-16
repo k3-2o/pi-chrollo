@@ -1,9 +1,11 @@
-// Chrollo query processing — tokenization, light stemming, typo fallback,
-// and distinctive-term extraction. Pure functions: no I/O, no state.
-// Feeds both the rg query construction (search.ts) and candidate tokenization
-// (rank.ts / bm25.ts).
+// Chrollo query processing — tokenization, stopword filtering, and
+// distinctive-term extraction for ripgrep. Pure: no I/O, no state.
+//
+// Deliberately NOT here anymore: stemming and the trigram typo fallback.
+// rg -F substring matches already catches inflections of the literal term,
+// and a typo fallback was a layer of compensation over the search engine.
 
-// Stopwords trimmed (no "remember", "talked", "thing" etc — those carry signal).
+// Stopwords trimmed (no "remember", "talked", "thing" — those carry no signal).
 export const STOP_WORDS = new Set([
   "the",
   "a",
@@ -153,64 +155,21 @@ export const STOP_WORDS = new Set([
 ]);
 
 // Split code identifiers (camelCase / snake_case / kebab / acronyms), lowercase,
-// drop fragments ≤ 2 chars. Splitting identifiers recovers recall
-// (optimizeRerenders → optimize + rerenders).
+// drop fragments <= 2 chars. Splitting identifiers recovers recall.
 export function tokenize(text: string): string[] {
   return text
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2") // getUserProfile -> get UserProfile
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2") // HTTPServer -> HTTP Server
-    .replace(/[_-]+/g, " ") // user_profile, kebab-case -> spaces
-    .replace(/[^\w\s]/g, " ") // strip remaining punctuation
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[_\-\s]+/g, " ")
+    .replace(/\W/g, " ")
+    .trim()
     .toLowerCase()
     .split(/\s+/)
     .filter((w) => w.length > 2);
 }
 
-const STEM_SUFFIXES = ["ment", "ion", "ing", "ed", "er", "es", "s"];
-
-// Light stemming: strip ONE common suffix from words > 4 chars, keep root ≥ 3.
-// ripgrep -F matches substrings, so grepping the stem catches all inflections
-// (deployment -> deploy matches deploy/deploys/deploying/deployed).
-// Trade-off: "er" occasionally over-matches (docker -> dock), mitigated by
-// corpus-frequency rarity filter downstream.
-export function stem(word: string): string {
-  if (word.length <= 4) return word; // too short to stem safely
-  for (const suf of STEM_SUFFIXES) {
-    if (word.endsWith(suf)) {
-      const root = word.slice(0, word.length - suf.length);
-      if (root.length >= 3) return root; // don't over-stem to a fragment
-      break; // suffix found but root too short -> keep original
-    }
-  }
-  return word;
-}
-
-// Expand term into [term, stem] when stemming changes it (rg group-level OR).
-export function groupWithStem(term: string): string[] {
-  const s = stem(term);
-  return s !== term ? [term, s] : [term];
-}
-
-// Trigram typo fallback: split term into 3-char trigrams and OR them as regex.
-// Catches typos (recieve <-> receive share 'rec' and 'ive') and partial
-// spellings without embeddings. Returns null when the term is too short to
-// yield ≥ 2 distinct trigrams.
-export function trigramRegex(term: string): string | null {
-  if (term.length < 4) return null;
-  const trigrams: string[] = [];
-  for (let i = 0; i + 3 <= term.length; i++) {
-    trigrams.push(term.slice(i, i + 3));
-  }
-  const uniq = [...new Set(trigrams)];
-  if (uniq.length < 2) return null;
-  return `(${uniq.join("|")})`;
-}
-
-// Extract the query's content words: lowercase, non-stopword. The old version
-// filtered by corpus rarity (appearing in < 30% of docs) — that required the
-// global dictionary that caused the 13s freeze and is permanently gone (SPEC
-// §3.3). The user already chose which words matter by typing them; we just drop
-// stopwords and bound the pattern count for ripgrep.
+// Extract the query's content words: lowercase, non-stopword, bounded for the
+// rg pattern count. The user already chose which words matter by typing them.
 export function queryTerms(query: string): string[] {
   return tokenize(query)
     .filter((w) => !STOP_WORDS.has(w))

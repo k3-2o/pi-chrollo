@@ -1,12 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  tokenize,
-  stem,
-  groupWithStem,
-  trigramRegex,
-  queryTerms,
-  STOP_WORDS,
-} from "../src/tokenize";
+import { tokenize, queryTerms, STOP_WORDS } from "../src/tokenize";
 
 describe("tokenize", () => {
   it("splits camelCase identifiers", () => {
@@ -48,72 +41,6 @@ describe("tokenize", () => {
       "port",
       "mapping",
     ]);
-  });
-});
-
-describe("stem", () => {
-  it("strips -ment suffix", () => {
-    expect(stem("deployment")).toBe("deploy");
-  });
-
-  it("strips -ing suffix", () => {
-    // light stemming has no double-consonant handling -> runn, not run
-    expect(stem("running")).toBe("runn");
-  });
-
-  it("strips -ed suffix", () => {
-    expect(stem("deployed")).toBe("deploy");
-  });
-
-  it("strips -er suffix (may over-match)", () => {
-    // documented over-match: docker -> dock (mitigated downstream by rarity)
-    expect(stem("docker")).toBe("dock");
-  });
-
-  it("leaves words with no matching suffix alone", () => {
-    expect(stem("config")).toBe("config");
-  });
-
-  it("refuses to stem words ≤ 4 chars (over-stem guard)", () => {
-    expect(stem("cats")).toBe("cats");
-    expect(stem("run")).toBe("run");
-  });
-
-  it("keeps the original when the root would be < 3 chars", () => {
-    // "doing" ends with -ing, root "do" (len 2) -> too short, keep original
-    expect(stem("doing")).toBe("doing");
-  });
-});
-
-describe("groupWithStem", () => {
-  it("returns term + stem when stemming changes it", () => {
-    expect(groupWithStem("deployment")).toEqual(["deployment", "deploy"]);
-  });
-
-  it("returns just the term when stemming doesn't change it", () => {
-    expect(groupWithStem("config")).toEqual(["config"]);
-  });
-});
-
-describe("trigramRegex", () => {
-  it("builds an OR of 3-char trigrams", () => {
-    // receive -> rec, ece, cei, eiv, ive
-    expect(trigramRegex("receive")).toBe("(rec|ece|cei|eiv|ive)");
-  });
-
-  it("returns null for terms shorter than 4 chars", () => {
-    expect(trigramRegex("cat")).toBeNull();
-    expect(trigramRegex("ab")).toBeNull();
-  });
-
-  it("dedups trigrams", () => {
-    // aaaa -> aaa, aaa -> dedup to one -> fewer than 2 -> null
-    expect(trigramRegex("aaaa")).toBeNull();
-  });
-
-  it("requires at least 2 distinct trigrams", () => {
-    // aaa -> only one trigram "aaa" -> null
-    expect(trigramRegex("aaa")).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLine, extractSessionCwd, type MessageRecord } from "../src/normalize";
+import { parseLine, type MessageRecord } from "../src/normalize";
 
 const PATH = "/home/k2/.pi/agent/sessions/--home-k2-proj--/2026-07-01T10-00-00-000Z_abc.jsonl";
 
@@ -155,46 +155,5 @@ describe("parseLine — robustness", () => {
       '{"type":"message","timestamp":"2026-07-01T10:00:00.000Z",' +
       '"message":{"role":"user","content":["string-block", null, 42, {"type":"text","text":"keep"}]}}';
     expect(msg(PATH, 1, raw)!.text).toBe("keep");
-  });
-});
-
-describe("parseLine — path dispatch (adapter seam)", () => {
-  it("parses Pi paths via the Pi adapter", () => {
-    const raw =
-      '{"type":"message","timestamp":"2026-07-01T10:00:00.000Z",' +
-      '"message":{"role":"user","content":[{"type":"text","text":"hello"}]}}';
-    expect(parseLine(PATH, 1, raw)?.kind).toBe("message");
-  });
-
-  it("defaults unknown paths to the Pi shape (v1)", () => {
-    const raw =
-      '{"type":"message","timestamp":"2026-07-01T10:00:00.000Z",' +
-      '"message":{"role":"user","content":[{"type":"text","text":"hello"}]}}';
-    // A non-Pi path still parses with the default adapter for now.
-    expect(parseLine("/some/other/path.jsonl", 1, raw)?.kind).toBe("message");
-  });
-});
-
-describe("extractSessionCwd", () => {
-  it("returns cwd from a session header line", () => {
-    const raw =
-      '{"type":"session","version":3,"id":"abc",' +
-      '"timestamp":"2026-07-01T10:00:00.000Z","cwd":"/home/k2/proj"}';
-    expect(extractSessionCwd(raw)).toBe("/home/k2/proj");
-  });
-
-  it("returns undefined for a non-session line", () => {
-    const raw =
-      '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}';
-    expect(extractSessionCwd(raw)).toBeUndefined();
-  });
-
-  it("returns undefined on unparseable input", () => {
-    expect(extractSessionCwd("garbage")).toBeUndefined();
-    expect(extractSessionCwd("")).toBeUndefined();
-  });
-
-  it("returns undefined when cwd field is missing", () => {
-    expect(extractSessionCwd('{"type":"session"}')).toBeUndefined();
   });
 });

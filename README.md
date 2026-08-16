@@ -25,7 +25,7 @@ Then in any Pi session, ask about something from a past conversation — the age
 
 Two tools, one workflow:
 
-1. **`search_memory`** — search past sessions by keyword. Returns markers like `path:line | role: preview`, ranked by relevance and recency.
+1. **`search_memory`** — search past sessions by keyword. Returns markers like `path:line | role: preview`, most-recent sessions first.
 2. **`read_memory`** — read a bounded window around a marker, rendered readably (`[HH:MM] role: text`).
 
 The agent calls `search_memory` when you reference past work, picks a marker, then calls `read_memory` with that marker's line number to see the surrounding context.
@@ -51,14 +51,13 @@ Tool outputs and internal reasoning are filtered out automatically — only real
 
 ## Ranking
 
-Results are ranked by:
+Chrollo keeps it boring on purpose.
 
-- **Term match** — how many of your search words appear, with saturation (5 hits isn't 5× better than 1)
-- **Length** — a match in a short line ranks above one in a long line
-- **Recency** — 30-day half-life; recent work surfaces above old
-- **Same project** — lines from the current working directory get a mild boost
+- **One ripgrep call.** `rg --json --sort modified -m 5 -F -e <term> -i` searches the corpus **and** orders sessions by recency (file mtime) in a single pass — no BM25, no stemming, no typo fallback, no global stats scan.
+- **Filter, then cap.** Each matched JSONL line is structurally filtered (drops tool outputs, thinking, metadata), capped at a few per session, and sliced to 15 markers.
+- **Honest failure.** A real timeout says "timed out — retry", never a fake "no memories". Esc genuinely cancels the scan.
 
-Rare terms are **not** weighted above common ones. You already chose the words by typing them; the tool trusts that choice rather than scanning the whole corpus to second-guess it. If a search misses, search again with different words.
+We give up per-line recency (mtime per file instead) and typo tolerance for ~4 source files that are easy to read.
 
 ## License
 
