@@ -1,3 +1,28 @@
+
+## [0.4.0] - 2026-08
+
+**Search engine flattened.** Rebuilt the retrieval path from eight scoring/scoping modules
+into a single ripgrep call + a lightweight rank overlay. Deleted the BM25 scorer, the
+recency-decay/cwd/diversity orchestrator, stemming, the trigram typo fallback, and the
+SIGTERM salvage layer. ripgrep now searches and recency-orders in one pass.
+
+### Added
+- Term-overlap ranking: a line matching more distinct query keywords ranks above a recent line matching fewer. Recency is the tie-break.
+- Real cancellation: Esc/abort is wired into the rg child; a cancelled scan returns `aborted`, never a fake miss.
+
+### Changed
+- rg per-file match cap raised to 200 so a real answer buried mid-session is reachable before ranking.
+- Recency via `--sortr modified` (most-recent sessions first) instead of 30-day half-life decay on per-line timestamps.
+- Search is stateless across calls — no corpus cache, no global term-frequency dictionary.
+- Honest timeout: a stalled scan says "search timed out — retry", never "No memories found".
+
+### Removed
+- `src/rank.ts`, `src/score.ts`, stemming/`groupWithStem`, the trigram typo fallback, the adapter-seam taxonomy, per-file cwd reads.
+- The 13s-freeze class of global-corpus-stat scanning entirely.
+
+### Fixed
+- A timed-out scan could previously be reported as an empty store; that can no longer happen.
+
 # Changelog
 
 All notable changes to Chrollo are documented here.
