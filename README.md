@@ -53,7 +53,7 @@ Tool outputs and internal reasoning are filtered out automatically — only real
 
 Chrollo keeps it boring on purpose.
 
-- **One ripgrep call.** `rg --json --sort modified -m 5 -F -e <term> -i` searches the corpus **and** orders sessions by recency (file mtime) in a single pass — no BM25, no stemming, no typo fallback, no global stats scan.
+- **One ripgrep call.** `rg --json --sortr modified -m 5 -F -e <term> -i` searches the corpus **and** orders sessions by recency (file mtime) in a single pass — no BM25, no stemming, no typo fallback, no global stats scan.
 - **Filter, then cap.** Each matched JSONL line is structurally filtered (drops tool outputs, thinking, metadata), capped at a few per session, and sliced to 15 markers.
 - **Honest failure.** A real timeout says "timed out — retry", never a fake "no memories". Esc genuinely cancels the scan.
 

@@ -1,5 +1,5 @@
 // Chrollo search — the flat pipeline. tokenize → rg → parse/filter → format.
-// ripgrep does the heavy lifting (search + `--sort modified` recency in one
+// ripgrep does the heavy lifting (search + `--sortr modified` recency in one
 // call). We only: build patterns from the query terms, run rg, filter each
 // matched line (drop toolResult / thinking / metadata), and emit markers.
 
@@ -58,7 +58,7 @@ export async function runRipgrep(
     "-n",
     "-F",
     "-i",
-    "--sort",
+    "--sortr",
     "modified",
     "-m",
     String(RG_MAX_COUNT_PER_FILE),
@@ -105,7 +105,7 @@ export function parseRgJson(stdout: string): RgMatch[] {
 
 // Convert rg matches into formatted markers. Structural filter (drop non-message
 // lines and tool outputs) happens here via parseLine. Matches are already
-// recency-sorted by rg (`--sort modified`); we apply a per-file diversity cap
+// recency-sorted by rg (`--sortr modified`); we apply a per-file diversity cap
 // and slice to MAX_RESULTS. Deterministic; yields to the event loop between
 // chunks so a fat common-term search doesn't block the TUI.
 export async function buildSearchResults(matches: RgMatch[]): Promise<string[]> {
@@ -118,7 +118,7 @@ export async function buildSearchResults(matches: RgMatch[]): Promise<string[]> 
     if (rec === null || rec.kind !== "message") continue; // structural filter
     if (rec.text.length === 0) continue; // nothing to show
 
-    // rg --sort modified already groups most-recent files first; spread per file.
+    // rg --sortr modified already groups most-recent files first; spread per file.
     const file = m.path;
     const n = perFile.get(file) ?? 0;
     if (n >= PER_FILE_CAP) continue;
