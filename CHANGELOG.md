@@ -1,3 +1,18 @@
+## [0.4.1] - 2026-09
+
+**Bridge-eligible.** Both tools are now factory exports — the "exportable ⇒ declarable"
+standard, same as pi-read-image.
+
+### Added
+- `createSearchMemoryTool()` / `createReadMemoryTool()` factory exports owning the full tool
+  objects (description, parameters, execute, renderers). The default extension is now just
+  two `registerTool` calls.
+
+### Fixed
+- Packaging: `@earendil-works/pi-tui` moved from devDependencies to **dependencies** — `Text`
+  is a runtime import, and the npm store copy had no `node_modules` (it only resolved via a
+  hoisted accidental from another package). `pi-coding-agent` stays dev-only: chrollo's use
+  is `import type` exclusively, erased at load time.
 
 ## [0.4.0] - 2026-08
 

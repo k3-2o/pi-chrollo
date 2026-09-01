@@ -1,4 +1,4 @@
-// --- Chrollo — Retrieval layer over Pi's native sessions (0.3.0) ---
+// --- Chrollo — Retrieval layer over Pi's native sessions (0.4.1) ---
 //
 // A read-only retrieval layer. Searches Pi's .jsonl session files with ripgrep
 // + BM25, renders matched windows readably. Does NOT capture, store, inject,
@@ -9,20 +9,32 @@
 //   2. agent calls read_memory(path, offset, limit?) → readable window
 // `offset` is REQUIRED on read — there is no whole-file dump path.
 
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { search } from "./src/search.js";
 import { read, READ_LIMIT_DEFAULT, READ_LIMIT_CAP } from "./src/read.js";
 
 export default function chrolloExtension(pi: ExtensionAPI): void {
+  pi.registerTool(createSearchMemoryTool());
+  pi.registerTool(createReadMemoryTool());
+}
+
+const searchParams = Type.Object({
+  query: Type.String({
+    description:
+      "Distinctive keywords from the topic you're looking for. All terms are OR-matched by ripgrep; results are BM25-ranked. E.g. 'docker compose port', 'chrollo slander', 'BM25 scorer'.",
+  }),
+});
+
+export function createSearchMemoryTool(): ToolDefinition<typeof searchParams> {
   // No session-scoped state. search is stateless across calls; there is no
   // capture, no injection, no cache, and no cwd boost.
 
   // --- search_memory ---
   // Returns path:line | role: preview markers. The agent picks one and feeds
   // its :line into read_memory's offset.
-  pi.registerTool({
+  return {
     name: "search_memory",
     label: "Search Memory",
     description: `Search past Pi sessions for relevant context.
@@ -44,12 +56,7 @@ Examples:
       "Use 2–4 distinctive keywords (proper nouns, identifiers, rare terms like 'k3s' or 'chrollo'). Terms are OR-matched: adding common words (the, about, thing, session) only widens the net, never narrows it.",
       "Every result is a marker (\`path:line | preview\`), not the content. Always follow up with read_memory using the marker's line number as offset to actually read the context.",
     ],
-    parameters: Type.Object({
-      query: Type.String({
-        description:
-          "Distinctive keywords from the topic you're looking for. All terms are OR-matched by ripgrep; results are BM25-ranked. E.g. 'docker compose port', 'chrollo slander', 'BM25 scorer'.",
-      }),
-    }),
+    parameters: searchParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("search_memory: aborted");
       // Exclude the current session's own file — the agent already has that
@@ -111,13 +118,33 @@ Examples:
       const n = (result.content?.[0]?.text ?? "").split("\n").filter((l) => l.includes("|")).length;
       return new Text(theme.fg("success", `✓ ${n} match${n === 1 ? "" : "es"}`), 0, 0);
     },
-  });
+  };
+}
 
+const readParams = Type.Object({
+  path: Type.String({
+    description: "Full session file path (from a search_memory marker).",
+  }),
+  offset: Type.Integer({
+    description:
+      "1-based line number to start reading at. Copy this from the marker's `:line` suffix.",
+    minimum: 1,
+  }),
+  limit: Type.Optional(
+    Type.Integer({
+      description: `Number of lines to read. Default ${READ_LIMIT_DEFAULT}, max ${READ_LIMIT_CAP}.`,
+      minimum: 1,
+      maximum: READ_LIMIT_CAP,
+    }),
+  ),
+});
+
+export function createReadMemoryTool(): ToolDefinition<typeof readParams> {
   // --- read_memory ---
   // Renders a bounded window [offset, offset+limit) of a session file readably.
   // `offset` is REQUIRED — there is no whole-file read. Use the :line from a
   // search_memory marker.
-  pi.registerTool({
+  return {
     name: "read_memory",
     label: "Read Memory",
     description: `Read a window of a past Pi session, rendered readably.
@@ -134,23 +161,7 @@ Parameters:
       "Never guess a path or offset for read_memory — always obtain them from a prior search_memory result.",
       "The one-line preview from search_memory rarely contains enough to act on. Reading the surrounding window is almost always worth the call.",
     ],
-    parameters: Type.Object({
-      path: Type.String({
-        description: "Full session file path (from a search_memory marker).",
-      }),
-      offset: Type.Integer({
-        description:
-          "1-based line number to start reading at. Copy this from the marker's `:line` suffix.",
-        minimum: 1,
-      }),
-      limit: Type.Optional(
-        Type.Integer({
-          description: `Number of lines to read. Default ${READ_LIMIT_DEFAULT}, max ${READ_LIMIT_CAP}.`,
-          minimum: 1,
-          maximum: READ_LIMIT_CAP,
-        }),
-      ),
-    }),
+    parameters: readParams,
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       // offset is schema-required (Type.Integer, not Optional), so a missing
       // offset is rejected by the framework before reaching here. The
@@ -219,5 +230,5 @@ Parameters:
       const note = result.details?.truncated ? " (truncated)" : "";
       return new Text(theme.fg("success", `✓ ${lines} line${lines === 1 ? "" : "s"}${note}`), 0, 0);
     },
-  });
+  };
 }
