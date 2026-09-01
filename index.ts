@@ -1,4 +1,4 @@
-// --- Chrollo — Retrieval layer over Pi's native sessions (0.4.1) ---
+// --- Chrollo — Retrieval layer over Pi's native sessions (0.4.2) ---
 //
 // A read-only retrieval layer. Searches Pi's .jsonl session files with ripgrep
 // + BM25, renders matched windows readably. Does NOT capture, store, inject,
@@ -23,7 +23,7 @@ export default function chrolloExtension(pi: ExtensionAPI): void {
 const searchParams = Type.Object({
   query: Type.String({
     description:
-      "Distinctive keywords from the topic you're looking for. All terms are OR-matched by ripgrep; results are BM25-ranked. E.g. 'docker compose port', 'chrollo slander', 'BM25 scorer'.",
+      "2–4 distinctive keywords — names, identifiers, rare terms. OR-matched, overlap-ranked. E.g. 'k3s ingress traefik'.",
   }),
 });
 
@@ -37,24 +37,12 @@ export function createSearchMemoryTool(): ToolDefinition<typeof searchParams> {
   return {
     name: "search_memory",
     label: "Search Memory",
-    description: `Search past Pi sessions for relevant context.
-
-Returns compact results: one line per match, formatted as \`<session-path>:<line> | <role>: <preview>\`. Each result is a MAP MARKER, not the full content — you must follow up with read_memory using the path and the line number as offset to see the surrounding context.
-
-Searches your entire Pi session history (~/.pi/agent/sessions). Terms are OR-matched by ripgrep and BM25-ranked: \`docker compose port\` matches any line containing docker, compose, OR port — so FEWER, RARER terms beat many common ones. Structural filtering drops tool outputs and metadata automatically — only real conversation turns are returned.
-
-Query hygiene: prefer 2–4 distinctive keywords (proper nouns, identifiers, rare terms). \`chrollo slander\` beats \`the chrollo slander session we had\` — the extra words widen the net without improving rank.
-
-Examples:
-  "chrollo slander"          — find the session where we discussed chrollo's flaws
-  "docker compose port"      — find past docker-compose debugging
-  "k3s ingress traefik"      — find k3s cluster work`,
-    promptSnippet:
-      "Search past Pi sessions for relevant context (returns path:line markers; follow up with read_memory)",
+    description: `Search past Pi conversations for relevant turns. Use when the user references earlier work, prior decisions, or a session current context can't answer — and when resuming a project, before re-exploring or re-asking. Returns \`path:line\` markers, never content: follow each marker with read_memory. Queries are OR-matched, so 2–4 rare terms (identifiers, proper nouns) outrank many common words.`,
+    promptSnippet: "Search past Pi conversations (path:line markers; follow with read_memory)",
     promptGuidelines: [
-      "Use search_memory FIRST whenever the user references past work or prior sessions ('remember when', 'we discussed', 'that session about', 'go back to'), AND whenever you resume a project or topic that may have history — even if the user doesn't explicitly ask. Checking memory before re-exploring code or re-asking questions saves redundant work.",
-      "Use 2–4 distinctive keywords (proper nouns, identifiers, rare terms like 'k3s' or 'chrollo'). Terms are OR-matched: adding common words (the, about, thing, session) only widens the net, never narrows it.",
-      "Every result is a marker (\`path:line | preview\`), not the content. Always follow up with read_memory using the marker's line number as offset to actually read the context.",
+      "Reach for this when the user says 'remember when', 'we discussed', 'that session about' — or whenever work resumes on a topic that may have history, even if they don't ask.",
+      "Query with 2–4 distinctive keywords — names, identifiers, rare terms. Common words only widen the net.",
+      "Every result is a marker. Follow up with read_memory to actually read the context.",
     ],
     parameters: searchParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -123,16 +111,15 @@ Examples:
 
 const readParams = Type.Object({
   path: Type.String({
-    description: "Full session file path (from a search_memory marker).",
+    description: "Session file path from a search_memory marker.",
   }),
   offset: Type.Integer({
-    description:
-      "1-based line number to start reading at. Copy this from the marker's `:line` suffix.",
+    description: "1-based line number from a search_memory marker.",
     minimum: 1,
   }),
   limit: Type.Optional(
     Type.Integer({
-      description: `Number of lines to read. Default ${READ_LIMIT_DEFAULT}, max ${READ_LIMIT_CAP}.`,
+      description: `Lines to read. Default ${READ_LIMIT_DEFAULT}, max ${READ_LIMIT_CAP}.`,
       minimum: 1,
       maximum: READ_LIMIT_CAP,
     }),
@@ -147,19 +134,11 @@ export function createReadMemoryTool(): ToolDefinition<typeof readParams> {
   return {
     name: "read_memory",
     label: "Read Memory",
-    description: `Read a window of a past Pi session, rendered readably.
-
-REQUIRES \`offset\` — there is no whole-file read. Get the path and offset from a search_memory result marker (the \`<path>:<line>\` prefix). Returns \`[HH:MM] role: text\` lines plus compact \`> toolName(args)\` summaries; tool outputs and internal thinking are skipped automatically.
-
-Parameters:
-  path   — the session file path from a search_memory marker
-  offset — the 1-based line number from the marker (the part after the last colon)
-  limit  — optional, default ${READ_LIMIT_DEFAULT}, max ${READ_LIMIT_CAP}`,
-    promptSnippet: "Read a bounded window of a past session (offset required)",
+    description: `Read a bounded window of a past Pi session, rendered as \`[HH:MM] role: text\` lines with tool calls summarized and noise skipped. Take path and offset from a search_memory marker — offset is the marker's line number; there is no whole-file read.`,
+    promptSnippet: "Read a past session around a search_memory marker (offset required)",
     promptGuidelines: [
-      "Use read_memory after every search_memory to read the context around a marker — pass the marker's line number as offset.",
-      "Never guess a path or offset for read_memory — always obtain them from a prior search_memory result.",
-      "The one-line preview from search_memory rarely contains enough to act on. Reading the surrounding window is almost always worth the call.",
+      "After each search_memory, read the marker's window — the preview line is rarely enough to act on.",
+      "Never guess path or offset; both come from the marker.",
     ],
     parameters: readParams,
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {

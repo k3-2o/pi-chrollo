@@ -1,3 +1,13 @@
+## [0.4.2] - 2026-09
+
+**Prompt surface rewrite.** Tool descriptions, snippets, and guidelines rebuilt in the
+session-memory register — plain sentences, concrete triggers, no ceremony. ~1900 → 1284 chars.
+
+### Changed
+- search_memory: description 1081 → 393 chars; query mechanics moved to one sentence + the param description; examples collapsed to a single inline `Ex:`.
+- read_memory: description 530 → 244 chars; the `Parameters:` prose block deleted (TypeBox schema already carries each param).
+- Dropped the stale "BM25-ranked" claim (engine is term-overlap + recency tie-break since 0.4.0).
+- Deduplicated: follow-up-with-read_memory lives once (search guidelines), no longer three times across both tools.
 ## [0.4.1] - 2026-09
 
 **Bridge-eligible.** Both tools are now factory exports — the "exportable ⇒ declarable"
