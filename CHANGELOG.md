@@ -1,3 +1,13 @@
+## [0.4.3] - 2026-09
+
+**Dependency security bump.** `@earendil-works/pi-tui` and `@earendil-works/pi-coding-agent`
+0.80.10 → 0.84.4, `vitest` 4.1.10 → 4.1.11. Clears all 6 `npm audit` advisories: 3 HIGH via
+transitive `undici` 8.5.0 (desync, info disclosure), 3 moderate via `vitest`. No API or
+behavior change — `just ci` green (85 tests).
+
+### Fixed
+- `npm audit`: 6 vulnerabilities → 0. Transitive `undici` updated 8.5.0 → 8.9.0 (patched);
+  `vitest` → 4.1.11.
 ## [0.4.2] - 2026-09
 
 **Prompt surface rewrite.** Tool descriptions, snippets, and guidelines rebuilt in the
