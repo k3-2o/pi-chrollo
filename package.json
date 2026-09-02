@@ -23,14 +23,14 @@
   },
   "dependencies": {
     "typebox": "^1.1.38",
-    "@earendil-works/pi-tui": "^0.80.10"
+    "@earendil-works/pi-tui": "^0.84.4"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "^0.84.4",
     "@types/node": "^26.1.1",
     "prettier": "^3.5.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "pi": {
     "extensions": [
