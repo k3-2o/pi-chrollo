@@ -1,6 +1,6 @@
 {
   "name": "@k3_2o/pi-chrollo",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Retrieval layer over Pi's native sessions \u2014 search past conversations, read matched windows. No capture, no storage, no injection.",
   "keywords": [
     "pi-package",
@@ -21,16 +21,19 @@
   "scripts": {
     "smoke": "tsx -e \"import './index'; console.log('OK')\""
   },
-  "dependencies": {
-    "typebox": "^1.1.38",
-    "@earendil-works/pi-tui": "^0.84.4"
-  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@earendil-works/pi-tui": "^0.84.4",
     "@types/node": "^26.1.1",
     "prettier": "^3.5.3",
     "typescript": "^5.9.3",
+    "typebox": "^1.1.38",
     "vitest": "^4.1.11"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "pi": {
     "extensions": [
